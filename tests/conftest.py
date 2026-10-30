@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncIterator
 
 import httpx
@@ -8,6 +9,23 @@ from pydantic import SecretStr
 from hindama.config import Settings
 from hindama.main import create_app
 from tests.tokens import CLIENT_ID, REGION, USER_POOL_ID, FakeUserPool
+
+# In CI every test must run: a missing variable would otherwise skip the RLS tests silently.
+FAIL_ON_SKIP = os.environ.get("HINDAMA_FAIL_ON_SKIP") == "1"
+_skipped: list[str] = []
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    if report.skipped:
+        _skipped.append(report.nodeid)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    if FAIL_ON_SKIP and _skipped and exitstatus == pytest.ExitCode.OK:
+        reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+        if reporter is not None:
+            reporter.write_line(f"HINDAMA_FAIL_ON_SKIP: {len(_skipped)} pruebas omitidas")
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 def make_settings(database_url: str) -> Settings:

@@ -25,7 +25,9 @@ dev = [
     "pytest>=9.2.0",
     "pytest-asyncio>=1.4.1",
     "pytest-cov>=7.1.0",
+    "pyyaml>=6.0.3",
     "ruff>=0.17.3",
+    "types-pyyaml>=6.0.12.20261030",
 ]
 
 [build-system]
@@ -74,7 +76,7 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 mypy_path = "src"
-packages = ["hindama"]
+files = ["src", "tests", "migrations"]
 
 [[tool.mypy.overrides]]
 module = ["asyncpg.*", "uuid6.*"]
@@ -86,7 +88,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers --strict-config"
 markers = [
     "integration: requires PostgreSQL",
 ]
@@ -94,3 +96,6 @@ markers = [
 [tool.coverage.run]
 source = ["hindama"]
 branch = true
+
+[tool.coverage.report]
+fail_under = 90

@@ -1,0 +1,138 @@
+# Continuous integration (RNF-10, ADR-016). Every pull request must pass all jobs.
+# Actions are pinned to a commit SHA: a moved tag cannot change what runs here.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint y tipos
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+
+  tests:
+    name: Pruebas, migraciones y contrato
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-bookworm
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      # Throwaway database that only lives during this job: these passwords protect nothing.
+      PGHOST: localhost
+      PGPASSWORD: postgres
+      POSTGRES_USER: postgres
+      HINDAMA_MIGRATIONS_DB_PASSWORD: ci-migrations
+      HINDAMA_API_DB_PASSWORD: ci-api
+      HINDAMA_SCANNER_DB_PASSWORD: ci-scanner
+      HINDAMA_BACKUP_DB_PASSWORD: ci-backup
+      HINDAMA_MIGRATIONS_DATABASE_URL: postgresql+asyncpg://hindama_migrations:ci-migrations@localhost:5432/hindama_test
+      HINDAMA_TEST_OWNER_DATABASE_URL: postgresql+asyncpg://hindama_migrations:ci-migrations@localhost:5432/hindama_test
+      HINDAMA_TEST_DATABASE_URL: postgresql+asyncpg://hindama_api:ci-api@localhost:5432/hindama_test
+      HINDAMA_TEST_SCANNER_DATABASE_URL: postgresql+asyncpg://hindama_scanner:ci-scanner@localhost:5432/hindama_test
+      HINDAMA_CONTRACT_PATH: ${{ github.workspace }}/hindama-docs/03-api/openapi.yaml
+      # A skipped test fails the job: a missing variable must not hide the RLS tests.
+      HINDAMA_FAIL_ON_SKIP: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The contract is the source of truth (ADR-016); it lives in the docs repository.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: The-Tito/hindama-docs
+          ref: main
+          path: hindama-docs
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Roles y bases de datos (el mismo script que Compose)
+        run: bash docker/postgres/init/01-roles.sh
+      - name: Migraciones de ida y vuelta
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+      - name: Pruebas con cobertura
+        run: uv run pytest --cov --cov-report=term-missing
+
+  audit:
+    name: Dependencias vulnerables
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      # Exactly what uv.lock pins, with hashes; the project itself is not on PyPI.
+      - run: uv export --locked --format requirements-txt --no-emit-project -o requirements-audit.txt
+      - run: uv run pip-audit --strict --disable-pip -r requirements-audit.txt
+
+  image:
+    name: Imagen y Trivy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: hindama-backend:ci
+      - name: Vulnerabilidades de la imagen
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: hindama-backend:ci
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Configuración insegura (Dockerfile, Compose)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: "1"
