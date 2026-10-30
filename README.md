@@ -38,9 +38,27 @@ uv sync                          # instala dependencias en .venv
 uv run ruff check .              # lint (incluye reglas de seguridad de Bandit)
 uv run ruff format .             # formato
 uv run mypy                      # tipos
-uv run pytest                    # pruebas
+uv run pytest                    # pruebas (con --cov: mínimo 90 % de cobertura)
 uv run pip-audit                 # vulnerabilidades en dependencias
+uv run pre-commit install        # una vez: ruff, mypy, gitleaks y revisiones básicas antes de cada commit
 ```
+
+### Integración continua
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) corre en cada pull request y en `develop` y `main`. Todo job debe pasar:
+
+| Job | Qué revisa |
+| --- | --- |
+| Lint y tipos | `ruff check`, `ruff format --check`, `mypy` (también `tests/` y `migrations/`) |
+| Pruebas, migraciones y contrato | Crea los roles con el mismo script de Compose, aplica las migraciones de ida y vuelta, `alembic check` y las pruebas con cobertura. Con `HINDAMA_FAIL_ON_SKIP=1`, una prueba omitida hace fallar el job. |
+| Dependencias vulnerables | `pip-audit` sobre lo que fija `uv.lock`, con hashes |
+| Imagen y Trivy | Construye la imagen y la escanea (vulnerabilidades altas o críticas con corrección disponible, y configuración insegura) |
+
+Las acciones están fijadas por SHA de commit.
+
+### Prueba de contrato
+
+[tests/contract/test_openapi_contract.py](tests/contract/test_openapi_contract.py) compara el OpenAPI que genera la app con `hindama-docs/03-api/openapi.yaml` (ADR-016). Toda operación implementada debe existir en el contrato y coincidir en `operationId`, seguridad, códigos 2xx, parámetros y esquemas de entrada y de respuesta. Las operaciones del contrato aún sin implementar solo aparecen como aviso. Por defecto lee el contrato de la carpeta hermana `../hindama-docs`; otra ruta se indica con `HINDAMA_CONTRACT_PATH`.
 
 ### Entorno local con Docker Compose
 
