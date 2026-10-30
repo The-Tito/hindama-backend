@@ -27,11 +27,32 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # Runs `alembic upgrade head` as the schema owner, then exits. The API waits for it.
+  migrations:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HINDAMA_MIGRATIONS_DATABASE_URL: postgresql+asyncpg://hindama_migrations:${HINDAMA_MIGRATIONS_DB_PASSWORD}@db:5432/hindama
+      PYTHONPATH: /app/src
+    volumes:
+      - ./src:/app/src:ro
+      - ./migrations:/app/migrations:ro
+    command: ["alembic", "upgrade", "head"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
   api:
     build: .
     depends_on:
       db:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
     environment:
       HINDAMA_ENVIRONMENT: ${HINDAMA_ENVIRONMENT:-development}
       HINDAMA_LOG_LEVEL: ${HINDAMA_LOG_LEVEL:-INFO}

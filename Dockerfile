@@ -36,6 +36,9 @@ RUN groupadd --system --gid 10001 hindama \
 
 WORKDIR /app
 COPY --from=build --chown=root:root /app/.venv /app/.venv
+# Migrations travel with the image so a deploy runs exactly the schema it was built with.
+COPY --chown=root:root alembic.ini ./
+COPY --chown=root:root migrations ./migrations
 
 USER hindama
 EXPOSE 8000
