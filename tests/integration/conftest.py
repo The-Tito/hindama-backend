@@ -5,13 +5,16 @@ Without it they are skipped, so the unit suite still runs without Docker.
 """
 
 import os
+from collections.abc import AsyncIterator
 
 import pytest
-from pydantic import SecretStr
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from hindama.config import Settings
+from tests.conftest import make_settings
 
 TEST_DATABASE_URL = os.environ.get("HINDAMA_TEST_DATABASE_URL")
+OWNER_URL = os.environ.get("HINDAMA_TEST_OWNER_DATABASE_URL")
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -25,8 +28,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 @pytest.fixture
 def settings() -> Settings:
     assert TEST_DATABASE_URL is not None
-    return Settings(
-        environment="test",
-        database_url=SecretStr(TEST_DATABASE_URL),
-        log_format="console",
-    )
+    return make_settings(TEST_DATABASE_URL)
+
+
+@pytest.fixture(scope="session")
+async def owner() -> AsyncIterator[AsyncEngine]:
+    """The schema owner: RLS does not filter it. Used to prepare and inspect data."""
+    if not OWNER_URL:
+        pytest.skip("HINDAMA_TEST_OWNER_DATABASE_URL is not set")
+    engine = create_async_engine(OWNER_URL)
+    yield engine
+    await engine.dispose()

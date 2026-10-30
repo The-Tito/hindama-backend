@@ -58,6 +58,9 @@ services:
       HINDAMA_LOG_LEVEL: ${HINDAMA_LOG_LEVEL:-INFO}
       HINDAMA_LOG_FORMAT: ${HINDAMA_LOG_FORMAT:-console}
       HINDAMA_DATABASE_URL: postgresql+asyncpg://hindama_api:${HINDAMA_API_DB_PASSWORD}@db:5432/hindama
+      HINDAMA_COGNITO_REGION: ${HINDAMA_COGNITO_REGION:?set it in .env}
+      HINDAMA_COGNITO_USER_POOL_ID: ${HINDAMA_COGNITO_USER_POOL_ID:?set it in .env}
+      HINDAMA_COGNITO_CLIENT_ID: ${HINDAMA_COGNITO_CLIENT_ID:?set it in .env}
       # Development only: the mounted source wins over the installed package, for --reload.
       PYTHONPATH: /app/src
     volumes:
