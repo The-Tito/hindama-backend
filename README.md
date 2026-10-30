@@ -85,3 +85,9 @@ uv run pytest
 ### Configuración
 
 Se lee de variables de entorno con el prefijo `HINDAMA_` (ver `src/hindama/config.py`). Se arranca con `--no-access-log` porque el registro de uvicorn incluye la query string; la API escribe su propio registro de cada petición.
+
+### Autenticación
+
+Toda petición, salvo `GET /health` (y `/docs` fuera de producción), necesita `Authorization: Bearer <access token de Cognito>`; si no, responde 401 antes de cualquier otra validación, incluso en rutas que no existen (RF-07). La API valida la firma con las llaves públicas del User Pool (`HINDAMA_COGNITO_REGION`, `HINDAMA_COGNITO_USER_POOL_ID`, `HINDAMA_COGNITO_CLIENT_ID`) y no guarda ningún secreto de Cognito.
+
+Cada endpoint que usa la base abre una transacción con `DbSession`, que fija las variables de RLS del usuario y lo da de alta en su primer acceso. Los endpoints de proyectos piden `Analyst` (el administrador recibe 403) y los de administración, `Admin` ([src/hindama/api/dependencies.py](src/hindama/api/dependencies.py)). Las pruebas firman sus propios tokens con un User Pool simulado ([tests/tokens.py](tests/tokens.py)).

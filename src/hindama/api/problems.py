@@ -62,6 +62,26 @@ def internal_error_response() -> JSONResponse:
     )
 
 
+_UNAUTHENTICATED = {
+    "auth.required": ("Autenticación requerida", "La petición no incluye un token de acceso."),
+    "auth.invalid_token": (
+        "Token inválido",
+        "El token de acceso venció o no es válido. Inicia sesión de nuevo.",
+    ),
+}
+
+
+def unauthenticated_response(code: str) -> JSONResponse:
+    """401 with `WWW-Authenticate: Bearer` (RFC 6750, convenciones.md section 8)."""
+    title, detail = _UNAUTHENTICATED[code]
+    challenge = "Bearer" if code == "auth.required" else 'Bearer error="invalid_token"'
+    return problem_response(401, code, title, detail, headers={"WWW-Authenticate": challenge})
+
+
+def app_error_response(exc: AppError) -> JSONResponse:
+    return problem_response(exc.status, exc.code, exc.title, exc.detail, exc.errors, exc.extensions)
+
+
 def _field_issue(error: dict[str, Any]) -> FieldIssue:
     location = [str(part) for part in error.get("loc", ())]
     if location and location[0] in _LOCATION_PREFIXES:
@@ -83,7 +103,7 @@ def _field_issue(error: dict[str, Any]) -> FieldIssue:
 async def _handle_app_error(_: Request, exc: Exception) -> JSONResponse:
     if not isinstance(exc, AppError):  # pragma: no cover - registered only for AppError
         raise exc
-    return problem_response(exc.status, exc.code, exc.title, exc.detail, exc.errors, exc.extensions)
+    return app_error_response(exc)
 
 
 async def _handle_validation_error(_: Request, exc: Exception) -> JSONResponse:

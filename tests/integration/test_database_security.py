@@ -48,14 +48,6 @@ class Analyst:
 
 
 @pytest.fixture(scope="session")
-async def owner() -> AsyncIterator[AsyncEngine]:
-    assert OWNER_URL is not None
-    engine = create_async_engine(OWNER_URL)
-    yield engine
-    await engine.dispose()
-
-
-@pytest.fixture(scope="session")
 async def api() -> AsyncIterator[AsyncEngine]:
     assert API_URL is not None
     # A single pooled connection, so consecutive transactions surely reuse it.
@@ -184,7 +176,7 @@ async def test_analyst_cannot_modify_another_project(
             "UPDATE identities SET name = 'mía' WHERE project_id = :id",
         ):
             result = await connection.execute(text(statement), {"id": bob.project_id})
-            assert result.rowcount == 0  # type: ignore[attr-defined]
+            assert result.rowcount == 0
 
 
 @pytest.mark.parametrize(
@@ -358,7 +350,7 @@ async def test_scanner_updates_verification_and_identity_status(
             text("UPDATE identities SET status = 'expired_credential' WHERE id = :id"),
             {"id": alice.identity_id},
         )
-        assert project.rowcount == identity.rowcount == 1  # type: ignore[attr-defined]
+        assert project.rowcount == identity.rowcount == 1
 
 
 @pytest.mark.parametrize(
