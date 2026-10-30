@@ -1,0 +1,84 @@
+# Local development: PostgreSQL 16 and the API.
+# Usage: cp .env.example .env  (and change every password), then  docker compose up --build
+# Redis and the scanner join when a use case needs them (rate limit, CU-12).
+
+name: hindama
+
+services:
+  db:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set it in .env}
+      HINDAMA_MIGRATIONS_DB_PASSWORD: ${HINDAMA_MIGRATIONS_DB_PASSWORD:?set it in .env}
+      HINDAMA_API_DB_PASSWORD: ${HINDAMA_API_DB_PASSWORD:?set it in .env}
+      HINDAMA_SCANNER_DB_PASSWORD: ${HINDAMA_SCANNER_DB_PASSWORD:?set it in .env}
+      HINDAMA_BACKUP_DB_PASSWORD: ${HINDAMA_BACKUP_DB_PASSWORD:?set it in .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      # Only reachable from this machine (tests and DB tools), never from the network.
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hindama"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # Runs `alembic upgrade head` as the schema owner, then exits. The API waits for it.
+  migrations:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HINDAMA_MIGRATIONS_DATABASE_URL: postgresql+asyncpg://hindama_migrations:${HINDAMA_MIGRATIONS_DB_PASSWORD}@db:5432/hindama
+      PYTHONPATH: /app/src
+    volumes:
+      - ./src:/app/src:ro
+      - ./migrations:/app/migrations:ro
+    command: ["alembic", "upgrade", "head"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    environment:
+      HINDAMA_ENVIRONMENT: ${HINDAMA_ENVIRONMENT:-development}
+      HINDAMA_LOG_LEVEL: ${HINDAMA_LOG_LEVEL:-INFO}
+      HINDAMA_LOG_FORMAT: ${HINDAMA_LOG_FORMAT:-console}
+      HINDAMA_DATABASE_URL: postgresql+asyncpg://hindama_api:${HINDAMA_API_DB_PASSWORD}@db:5432/hindama
+      # Development only: the mounted source wins over the installed package, for --reload.
+      PYTHONPATH: /app/src
+    volumes:
+      - ./src:/app/src:ro
+    command:
+      [
+        "uvicorn", "hindama.main:create_app", "--factory",
+        "--host", "0.0.0.0", "--port", "8000",
+        "--no-access-log", "--reload", "--reload-dir", "/app/src",
+      ]
+    ports:
+      - "127.0.0.1:8000:8000"
+    # Same hardening as production (architecture, section 2.3).
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    restart: unless-stopped
+
+volumes:
+  db-data:
