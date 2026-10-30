@@ -70,7 +70,7 @@ uv run alembic check                                     # ¿los modelos coincid
 
 ### Pruebas de integración
 
-Corren contra PostgreSQL real; sin estas variables se omiten. Las de reglas del esquema se conectan como dueño, porque prueban restricciones, no permisos:
+Corren contra PostgreSQL real; sin estas variables se omiten. Las de reglas del esquema se conectan como dueño, porque prueban restricciones, no permisos. Las de seguridad de la base (RLS, privilegios, bitácora inmutable) usan los tres roles:
 
 ```bash
 set -a; . ./.env; set +a
@@ -78,6 +78,7 @@ export HINDAMA_MIGRATIONS_DATABASE_URL="postgresql+asyncpg://hindama_migrations:
 uv run alembic upgrade head          # la base de pruebas también necesita el esquema
 export HINDAMA_TEST_DATABASE_URL="postgresql+asyncpg://hindama_api:${HINDAMA_API_DB_PASSWORD}@localhost:5432/hindama_test"
 export HINDAMA_TEST_OWNER_DATABASE_URL="postgresql+asyncpg://hindama_migrations:${HINDAMA_MIGRATIONS_DB_PASSWORD}@localhost:5432/hindama_test"
+export HINDAMA_TEST_SCANNER_DATABASE_URL="postgresql+asyncpg://hindama_scanner:${HINDAMA_SCANNER_DB_PASSWORD}@localhost:5432/hindama_test"
 uv run pytest
 ```
 
