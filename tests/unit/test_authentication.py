@@ -4,6 +4,7 @@ import httpx
 import pytest
 from fastapi import APIRouter, FastAPI, Request
 
+from hindama.api.dependencies import AnyUser
 from tests.tokens import FakeUserPool
 from tests.unit.test_problems import assert_problem
 
@@ -96,3 +97,20 @@ async def test_the_token_is_never_logged(
     assert "invalid_token" in output.out + output.err  # the rejection is logged...
     assert token not in output.out + output.err
     assert token.split(".")[1] not in output.out + output.err  # not even the claims
+
+
+async def test_database_down_is_503_without_details(
+    app: FastAPI, client: httpx.AsyncClient
+) -> None:
+    """The unit settings point to a port where nothing listens (convenciones.md section 8)."""
+    router = APIRouter()
+
+    @router.get("/needs-db")
+    async def needs_db(user: AnyUser) -> dict[str, str]:
+        return {"id": str(user.id)}
+
+    app.include_router(router)
+    response = await client.get("/needs-db")
+
+    body = assert_problem(response, 503, "service.unavailable")
+    assert "localhost" not in str(body)

@@ -3,13 +3,20 @@
 from collections.abc import AsyncIterator
 from typing import Annotated
 
+import structlog
 from fastapi import Depends, Request
+from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from hindama.core.auth import CurrentUser, Principal, Role
-from hindama.core.errors import ForbiddenError
+from hindama.core.errors import ForbiddenError, ServiceUnavailableError
 from hindama.db.session import set_rls_context
 from hindama.services.accounts import resolve_user
+
+log = structlog.get_logger(__name__)
+
+# Raised when the connection cannot be opened: the database is down, starting or unreachable.
+DATABASE_UNAVAILABLE = (OSError, TimeoutError, OperationalError, InterfaceError)
 
 
 def get_engine(request: Request) -> AsyncEngine:
@@ -26,11 +33,16 @@ async def open_db_session(request: Request) -> AsyncIterator[AsyncSession]:
     principal: Principal = request.state.principal  # set by AuthenticationMiddleware
     session_factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
     async with session_factory() as session, session.begin():
-        await set_rls_context(session, cognito_sub=principal.cognito_sub, role=principal.role)
-        user = await resolve_user(session, principal)
-        await set_rls_context(
-            session, cognito_sub=user.cognito_sub, role=user.role, user_id=user.id
-        )
+        try:
+            await set_rls_context(session, cognito_sub=principal.cognito_sub, role=principal.role)
+            user = await resolve_user(session, principal)
+            await set_rls_context(
+                session, cognito_sub=user.cognito_sub, role=user.role, user_id=user.id
+            )
+        except DATABASE_UNAVAILABLE as error:
+            # Only the type: the message may include the host or user of the database.
+            log.warning("database_unavailable", error=type(error).__name__)
+            raise ServiceUnavailableError() from error
         request.state.user = user
         yield session
 
