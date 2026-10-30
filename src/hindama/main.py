@@ -12,6 +12,7 @@ from fastapi import FastAPI
 
 from hindama.api import health
 from hindama.api.middleware import AuthenticationMiddleware, RequestContextMiddleware
+from hindama.api.openapi import install_openapi
 from hindama.api.problems import register_problem_handlers
 from hindama.config import Settings, get_settings
 from hindama.core.auth import TokenVerifier
@@ -61,5 +62,6 @@ def create_app(settings: Settings | None = None, verifier: TokenVerifier | None 
         AuthenticationMiddleware, verifier=verifier, public_paths=frozenset(public_paths)
     )
     app.add_middleware(RequestContextMiddleware)
+    install_openapi(app, frozenset(public_paths))
     app.include_router(health.router)
     return app
