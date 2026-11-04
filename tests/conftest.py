@@ -8,6 +8,7 @@ from pydantic import SecretStr
 
 from hindama.config import Settings
 from hindama.main import create_app
+from tests.dns import FakeResolver
 from tests.tokens import CLIENT_ID, REGION, USER_POOL_ID, FakeUserPool
 
 # In CI every test must run: a missing variable would otherwise skip the RLS tests silently.
@@ -51,8 +52,18 @@ def user_pool() -> FakeUserPool:
 
 
 @pytest.fixture
-def app(settings: Settings, user_pool: FakeUserPool) -> FastAPI:
-    return create_app(settings, verifier=user_pool.verifier(), profiles=user_pool.profile_client())
+def resolver() -> FakeResolver:
+    return FakeResolver()
+
+
+@pytest.fixture
+def app(settings: Settings, user_pool: FakeUserPool, resolver: FakeResolver) -> FastAPI:
+    return create_app(
+        settings,
+        verifier=user_pool.verifier(),
+        profiles=user_pool.profile_client(),
+        resolver=resolver,
+    )
 
 
 @pytest.fixture

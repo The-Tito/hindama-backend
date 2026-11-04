@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, IPvAnyAddress, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # Version of the responsible-use terms in force (RF-16, RN-12). The text is published by the
     # frontend; changing this value asks every user to accept again.
     terms_version: str = Field(default="2026-10-30", pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+    # Hindama's own public addresses (the Elastic IPs of frontend and backend): nobody may point the
+    # platform at itself (ADR-008). JSON list, e.g. ["203.0.113.10", "203.0.113.11"].
+    own_ip_addresses: list[IPvAnyAddress] = Field(default_factory=list)
 
     @property
     def is_production(self) -> bool:

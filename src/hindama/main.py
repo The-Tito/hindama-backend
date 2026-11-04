@@ -10,13 +10,14 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 
-from hindama.api import accounts, health
+from hindama.api import accounts, health, projects
 from hindama.api.middleware import AuthenticationMiddleware, RequestContextMiddleware
 from hindama.api.openapi import install_openapi
 from hindama.api.problems import register_problem_handlers
 from hindama.config import Settings, get_settings
 from hindama.core.auth import TokenVerifier
 from hindama.core.cognito import ProfileClient
+from hindama.core.destinations import Resolver, SystemResolver
 from hindama.core.logging import configure_logging
 from hindama.db.session import create_engine, create_session_factory
 
@@ -25,8 +26,10 @@ def create_app(
     settings: Settings | None = None,
     verifier: TokenVerifier | None = None,
     profiles: ProfileClient | None = None,
+    resolver: Resolver | None = None,
 ) -> FastAPI:
-    """`verifier` and `profiles` are injected only by tests, with a fake User Pool."""
+    """`verifier` and `profiles` are injected only by tests, with a fake User Pool, and `resolver`
+    with a fake DNS."""
     settings = settings or get_settings()
     configure_logging(settings.log_level, settings.log_format)
     engine = create_engine(settings)
@@ -64,6 +67,7 @@ def create_app(
     app.state.engine = engine
     app.state.session_factory = create_session_factory(engine)
     app.state.profiles = profiles
+    app.state.resolver = resolver or SystemResolver()
 
     register_problem_handlers(app)
     # The last one added is the outermost: request context wraps authentication.
@@ -75,4 +79,5 @@ def create_app(
     install_openapi(app, frozenset(public_paths))
     app.include_router(health.router)
     app.include_router(accounts.router)
+    app.include_router(projects.router)
     return app
