@@ -55,12 +55,18 @@ Operation = tuple[str, str]  # (METHOD, path)
 
 
 def operations(document: dict[str, Any]) -> dict[Operation, dict[str, Any]]:
-    return {
-        (method.upper(), path): operation
-        for path, item in document.get("paths", {}).items()
-        for method, operation in item.items()
-        if method in HTTP_METHODS
-    }
+    """Each operation with the parameters of its path item merged in (OpenAPI 3: the operation's
+    own parameter wins when both declare the same name and location)."""
+    result = {}
+    for path, item in document.get("paths", {}).items():
+        shared = item.get("parameters", [])
+        for method, operation in item.items():
+            if method in HTTP_METHODS:
+                result[(method.upper(), path)] = {
+                    **operation,
+                    "parameters": [*shared, *operation.get("parameters", [])],
+                }
+    return result
 
 
 class Resolver:
