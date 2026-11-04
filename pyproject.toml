@@ -96,6 +96,9 @@ markers = [
 [tool.coverage.run]
 source = ["hindama"]
 branch = true
+# SQLAlchemy runs the async driver inside greenlets: without this, lines after an `await` on
+# the database are reported as not covered.
+concurrency = ["greenlet", "thread"]
 
 [tool.coverage.report]
 fail_under = 90
