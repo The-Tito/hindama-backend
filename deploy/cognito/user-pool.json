@@ -1,0 +1,45 @@
+{
+  "PoolName": "REPLACED_BY_SCRIPT",
+  "UserPoolTier": "ESSENTIALS",
+  "DeletionProtection": "ACTIVE",
+  "Policies": {
+    "PasswordPolicy": {
+      "MinimumLength": 12,
+      "RequireUppercase": true,
+      "RequireLowercase": true,
+      "RequireNumbers": true,
+      "RequireSymbols": true,
+      "TemporaryPasswordValidityDays": 1,
+      "PasswordHistorySize": 5
+    },
+    "SignInPolicy": {
+      "AllowedFirstAuthFactors": ["PASSWORD"]
+    }
+  },
+  "UsernameAttributes": ["email"],
+  "UsernameConfiguration": { "CaseSensitive": false },
+  "AutoVerifiedAttributes": ["email"],
+  "UserAttributeUpdateSettings": { "AttributesRequireVerificationBeforeUpdate": ["email"] },
+  "Schema": [
+    { "Name": "email", "AttributeDataType": "String", "Required": true, "Mutable": true },
+    {
+      "Name": "name",
+      "AttributeDataType": "String",
+      "Required": true,
+      "Mutable": true,
+      "StringAttributeConstraints": { "MinLength": "1", "MaxLength": "100" }
+    }
+  ],
+  "AdminCreateUserConfig": { "AllowAdminCreateUserOnly": false },
+  "AccountRecoverySetting": {
+    "RecoveryMechanisms": [{ "Name": "verified_email", "Priority": 1 }]
+  },
+  "MfaConfiguration": "OFF",
+  "EmailConfiguration": { "EmailSendingAccount": "COGNITO_DEFAULT" },
+  "VerificationMessageTemplate": {
+    "DefaultEmailOption": "CONFIRM_WITH_CODE",
+    "EmailSubject": "Tu código de verificación de Hindama",
+    "EmailMessage": "Tu código de verificación de Hindama es {####}. Si no creaste una cuenta, ignora este correo."
+  },
+  "UserPoolTags": { "project": "hindama" }
+}
