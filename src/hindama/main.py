@@ -10,18 +10,23 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 
-from hindama.api import health
+from hindama.api import accounts, health
 from hindama.api.middleware import AuthenticationMiddleware, RequestContextMiddleware
 from hindama.api.openapi import install_openapi
 from hindama.api.problems import register_problem_handlers
 from hindama.config import Settings, get_settings
 from hindama.core.auth import TokenVerifier
+from hindama.core.cognito import ProfileClient
 from hindama.core.logging import configure_logging
 from hindama.db.session import create_engine, create_session_factory
 
 
-def create_app(settings: Settings | None = None, verifier: TokenVerifier | None = None) -> FastAPI:
-    """`verifier` is injected only by tests, with their own signing keys."""
+def create_app(
+    settings: Settings | None = None,
+    verifier: TokenVerifier | None = None,
+    profiles: ProfileClient | None = None,
+) -> FastAPI:
+    """`verifier` and `profiles` are injected only by tests, with a fake User Pool."""
     settings = settings or get_settings()
     configure_logging(settings.log_level, settings.log_format)
     engine = create_engine(settings)
@@ -35,11 +40,15 @@ def create_app(settings: Settings | None = None, verifier: TokenVerifier | None 
         http=jwks_http,
         cache_seconds=settings.jwks_cache_seconds,
     )
+    # GetUser, with the caller's access token. Same rules: fixed URL, short timeout, no redirects.
+    cognito_http = httpx.AsyncClient(timeout=5.0, follow_redirects=False)
+    profiles = profiles or ProfileClient(endpoint=settings.cognito_idp_endpoint, http=cognito_http)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         yield
         await jwks_http.aclose()
+        await cognito_http.aclose()
         await engine.dispose()
 
     app = FastAPI(
@@ -54,6 +63,7 @@ def create_app(settings: Settings | None = None, verifier: TokenVerifier | None 
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = create_session_factory(engine)
+    app.state.profiles = profiles
 
     register_problem_handlers(app)
     # The last one added is the outermost: request context wraps authentication.
@@ -64,4 +74,5 @@ def create_app(settings: Settings | None = None, verifier: TokenVerifier | None 
     app.add_middleware(RequestContextMiddleware)
     install_openapi(app, frozenset(public_paths))
     app.include_router(health.router)
+    app.include_router(accounts.router)
     return app

@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,3 +26,23 @@ async def create(session: AsyncSession, cognito_sub: str) -> UUID | None:
         .returning(User.id)
     )
     return await session.scalar(statement)
+
+
+async def get(session: AsyncSession, user_id: UUID) -> User:
+    """The caller's own row; RLS hides every other one."""
+    return await session.get_one(User, user_id)
+
+
+async def accept_terms(session: AsyncSession, user_id: UUID, version: str) -> User:
+    """Records the accepted version with the database clock (RF-16)."""
+    statement = (
+        update(User)
+        .where(User.id == user_id)
+        .values(terms_version=version, terms_accepted_at=func.now())
+        .returning(User)
+        .execution_options(populate_existing=True)
+    )
+    user = await session.scalar(statement)
+    if user is None:  # pragma: no cover - the caller's row exists (resolve_user)
+        raise RuntimeError("user row not found")
+    return user

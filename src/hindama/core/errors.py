@@ -45,6 +45,18 @@ class NotFoundError(AppError):
         )
 
 
+class UnauthenticatedError(AppError):
+    """401 raised after the middleware: e.g. Cognito revoked a token whose signature is valid."""
+
+    def __init__(self, code: str = "auth.invalid_token") -> None:
+        super().__init__(
+            code=code,
+            title="Token inválido",
+            detail="El token de acceso venció o no es válido. Inicia sesión de nuevo.",
+            status=401,
+        )
+
+
 class ForbiddenError(AppError):
     def __init__(self, code: str, title: str, detail: str) -> None:
         super().__init__(code=code, title=title, detail=detail, status=403)
