@@ -11,7 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from hindama.core.errors import AppError, FieldIssue
+from hindama.core.errors import AppError, FieldIssue, UnauthenticatedError
 from hindama.core.request_context import get_request_id, new_request_id
 
 PROBLEM_MEDIA_TYPE = "application/problem+json"
@@ -79,6 +79,8 @@ def unauthenticated_response(code: str) -> JSONResponse:
 
 
 def app_error_response(exc: AppError) -> JSONResponse:
+    if isinstance(exc, UnauthenticatedError):  # same body and challenge as the middleware's 401
+        return unauthenticated_response(exc.code)
     return problem_response(exc.status, exc.code, exc.title, exc.detail, exc.errors, exc.extensions)
 
 

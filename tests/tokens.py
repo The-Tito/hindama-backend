@@ -9,6 +9,7 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from hindama.core.auth import TokenVerifier
+from hindama.core.cognito import GET_USER_TARGET, ProfileClient
 
 REGION = "us-east-1"
 USER_POOL_ID = "us-east-1_TestPool1"
@@ -16,6 +17,7 @@ CLIENT_ID = "hindamatestclient"
 ADMIN_GROUP = "administradores"
 ISSUER = f"https://cognito-idp.{REGION}.amazonaws.com/{USER_POOL_ID}"
 JWKS_URL = f"{ISSUER}/.well-known/jwks.json"
+IDP_ENDPOINT = f"https://cognito-idp.{REGION}.amazonaws.com/"
 
 
 class FakeUserPool:
@@ -24,6 +26,10 @@ class FakeUserPool:
         self.kid = "test-key-1"
         self.jwks_requests = 0
         self.jwks_available = True
+        # GetUser: attributes per sub, and a forced answer (status, body) to simulate failures.
+        self.attributes: dict[str, dict[str, str]] = {}
+        self.get_user_response: tuple[int, dict[str, Any]] | None = None
+        self.get_user_requests: list[httpx.Request] = []
 
     def jwks(self) -> dict[str, Any]:
         public = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(self.key.public_key()))
@@ -73,6 +79,32 @@ class FakeUserPool:
             return httpx.Response(200, json=self.jwks())
 
         return httpx.MockTransport(handle)
+
+    def profile(self, sub: str) -> dict[str, str]:
+        """Attributes of a user, as registered in the User Pool (name and email, RF-01)."""
+        return self.attributes.get(sub, {"name": "Ana López", "email": f"{sub[:8]}@ejemplo.com"})
+
+    def get_user_transport(self) -> httpx.MockTransport:
+        def handle(request: httpx.Request) -> httpx.Response:
+            assert str(request.url) == IDP_ENDPOINT
+            assert request.headers["X-Amz-Target"] == GET_USER_TARGET
+            self.get_user_requests.append(request)
+            if self.get_user_response is not None:
+                status, body = self.get_user_response
+                return httpx.Response(status, json=body)
+            token = json.loads(request.content)["AccessToken"]
+            sub = jwt.decode(token, options={"verify_signature": False})["sub"]
+            attributes = [{"Name": "sub", "Value": sub}] + [
+                {"Name": name, "Value": value} for name, value in self.profile(sub).items()
+            ]
+            return httpx.Response(200, json={"Username": sub, "UserAttributes": attributes})
+
+        return httpx.MockTransport(handle)
+
+    def profile_client(self) -> ProfileClient:
+        return ProfileClient(
+            endpoint=IDP_ENDPOINT, http=httpx.AsyncClient(transport=self.get_user_transport())
+        )
 
     def verifier(self) -> TokenVerifier:
         return TokenVerifier(

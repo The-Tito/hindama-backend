@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     cognito_admin_group: str = "administradores"  # RN-04, RF-09
     jwks_cache_seconds: int = Field(default=3600, ge=60, le=86_400)
 
+    # Version of the responsible-use terms in force (RF-16, RN-12). The text is published by the
+    # frontend; changing this value asks every user to accept again.
+    terms_version: str = Field(default="2026-10-30", pattern=r"^\d{4}-\d{2}-\d{2}$")
+
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
@@ -42,6 +46,11 @@ class Settings(BaseSettings):
         return (
             f"https://cognito-idp.{self.cognito_region}.amazonaws.com/{self.cognito_user_pool_id}"
         )
+
+    @property
+    def cognito_idp_endpoint(self) -> str:
+        """Cognito Identity Provider API, used for `GetUser`."""
+        return f"https://cognito-idp.{self.cognito_region}.amazonaws.com/"
 
     @property
     def cognito_jwks_url(self) -> str:

@@ -52,7 +52,7 @@ def user_pool() -> FakeUserPool:
 
 @pytest.fixture
 def app(settings: Settings, user_pool: FakeUserPool) -> FastAPI:
-    return create_app(settings, verifier=user_pool.verifier())
+    return create_app(settings, verifier=user_pool.verifier(), profiles=user_pool.profile_client())
 
 
 @pytest.fixture

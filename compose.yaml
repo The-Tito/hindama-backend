@@ -61,6 +61,7 @@ services:
       HINDAMA_COGNITO_REGION: ${HINDAMA_COGNITO_REGION:?set it in .env}
       HINDAMA_COGNITO_USER_POOL_ID: ${HINDAMA_COGNITO_USER_POOL_ID:?set it in .env}
       HINDAMA_COGNITO_CLIENT_ID: ${HINDAMA_COGNITO_CLIENT_ID:?set it in .env}
+      HINDAMA_TERMS_VERSION: ${HINDAMA_TERMS_VERSION:-2026-10-30}
       # Development only: the mounted source wins over the installed package, for --reload.
       PYTHONPATH: /app/src
     volumes:
