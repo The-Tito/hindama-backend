@@ -28,6 +28,7 @@ dev = [
     "pyyaml>=6.0.3",
     "ruff>=0.17.3",
     "schemathesis>=4.33.1",
+    "trustme>=1.2.1",
     "types-pyyaml>=6.0.12.20261030",
 ]
 
@@ -58,15 +59,25 @@ select = [
     "PTH",      # pathlib
     "DTZ",      # naive datetimes
     "T20",      # leftover print()
+    "TID251",   # banned imports: httpx only through safe_http (ADR-008)
 ]
 ignore = [
     "RUF001", "RUF002", "RUF003",  # user-facing fallback messages are in Spanish: accents and «quotes» are valid
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106"]  # asserts and test passwords
+"tests/**" = ["S101", "S105", "S106", "TID251"]  # asserts, test passwords, httpx test clients
+# The SSRF guard itself, and the Cognito calls: fixed AWS URLs from configuration, never the user's.
+"src/hindama/core/safe_http.py" = ["TID251"]
+"src/hindama/core/auth.py" = ["TID251"]
+"src/hindama/core/cognito.py" = ["TID251"]
+"src/hindama/main.py" = ["TID251"]
 # Migrations build DDL from module constants (table and role names), never from input.
 "migrations/**" = ["E501", "S608"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"httpx".msg = "Usa hindama.core.safe_http: toda petición a un destino del usuario pasa por la guardia SSRF (ADR-008)."
+"httpcore".msg = "Usa hindama.core.safe_http: toda petición a un destino del usuario pasa por la guardia SSRF (ADR-008)."
 
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Path"]
