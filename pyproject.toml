@@ -28,6 +28,7 @@ dev = [
     "pyyaml>=6.0.3",
     "ruff>=0.17.3",
     "schemathesis>=4.33.1",
+    "trustme>=1.2.1",
     "types-pyyaml>=6.0.12.20261030",
 ]
 
