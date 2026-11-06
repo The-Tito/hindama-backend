@@ -89,6 +89,10 @@ jobs:
           uv run alembic upgrade head
       - name: Pruebas con cobertura
         run: uv run pytest --cov --cov-report=term-missing
+      # The running API against the contract: status codes, schemas, headers and extra fields
+      # (ADR-016, technical test PT-03 in hindama-docs).
+      - name: Schemathesis contra la API levantada
+        run: tests/schemathesis/run.sh
 
   audit:
     name: Dependencias vulnerables

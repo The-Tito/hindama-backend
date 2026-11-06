@@ -141,6 +141,8 @@ async def test_a_new_terms_version_asks_for_acceptance_again(
         ({}, 422, "validation.failed"),
         ({"version": CURRENT, "accepted": True}, 422, "validation.failed"),
         ({"version": 20261030}, 422, "validation.failed"),
+        ({"version": "x" * 51}, 422, "validation.failed"),
+        ({"version": "2026-10-30\u0000"}, 422, "validation.failed"),
     ],
 )
 async def test_invalid_bodies(

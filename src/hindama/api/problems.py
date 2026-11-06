@@ -10,6 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.routing import Match
 
 from hindama.core.errors import AppError, FieldIssue, UnauthenticatedError
 from hindama.core.request_context import get_request_id, new_request_id
@@ -129,7 +130,25 @@ async def _handle_validation_error(_: Request, exc: Exception) -> JSONResponse:
     )
 
 
-async def _handle_http_exception(_: Request, exc: Exception) -> JSONResponse:
+_HTTP_METHODS = ("DELETE", "GET", "PATCH", "POST", "PUT")
+
+
+def _allowed_methods(request: Request) -> str:
+    """Every method of the path. Starlette only lists the methods of the first route that matches
+    the path, and FastAPI registers one route per method (RFC 9110 15.5.6 asks for all of them).
+    Asks each route through `matches()`, the public interface, also for included routers."""
+    routes = request.app.router.routes
+    allowed = [
+        method
+        for method in _HTTP_METHODS
+        if any(
+            route.matches({**request.scope, "method": method})[0] is Match.FULL for route in routes
+        )
+    ]
+    return ", ".join(allowed)
+
+
+async def _handle_http_exception(request: Request, exc: Exception) -> JSONResponse:
     if not isinstance(exc, StarletteHTTPException):  # pragma: no cover
         raise exc
     if exc.status_code == 404:
@@ -140,7 +159,7 @@ async def _handle_http_exception(_: Request, exc: Exception) -> JSONResponse:
             "request.method_not_allowed",
             "Método no permitido",
             "La ruta no acepta este método HTTP.",
-            headers=dict(exc.headers or {}),
+            headers={**(exc.headers or {}), "Allow": _allowed_methods(request)},
         )
     if exc.status_code == 400:
         return problem_response(

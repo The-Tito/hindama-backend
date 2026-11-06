@@ -10,7 +10,7 @@ from hindama.api.dependencies import Analyst, DbSession
 from hindama.config import Settings
 from hindama.models.enums import Severity
 from hindama.repositories.projects import Sort
-from hindama.schemas.common import Warning
+from hindama.schemas.common import SINGLE_LINE, Warning
 from hindama.schemas.projects import (
     ContractVersionSummary,
     ModuleAvailability,
@@ -26,6 +26,9 @@ from hindama.services import projects as service
 from hindama.services.projects import WARNING_MESSAGES, Dashboard, UrlPolicy
 
 router = APIRouter(tags=["Projects"])
+
+# convenciones.md 7. Without a bound, a huge page overflowed PostgreSQL's int64 OFFSET (500).
+MAX_PAGE = 10_000
 
 
 def get_url_policy(request: Request) -> UrlPolicy:
@@ -101,7 +104,7 @@ def _project(view: Dashboard) -> Project:
 async def list_projects(
     _: Analyst,
     db: DbSession,
-    page: Annotated[int, Query(ge=1)] = 1,
+    page: Annotated[int, Query(ge=1, le=MAX_PAGE)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     sort: Sort = "-created_at",
 ) -> ProjectPage:
@@ -182,7 +185,7 @@ async def update_project(
 )
 async def delete_project(
     project_id: UUID,
-    confirmation: Annotated[str, Query(max_length=100)],
+    confirmation: Annotated[str, Query(min_length=1, max_length=100, pattern=SINGLE_LINE)],
     _: Analyst,
     db: DbSession,
 ) -> Response:

@@ -146,17 +146,30 @@ class Resolver:
             },
         }
 
-    def success(self, operation: dict[str, Any]) -> dict[str, Any]:
-        """2xx responses only: FastAPI adds its own 422, and errors follow convenciones.md."""
-        result = {}
-        for status, response in operation.get("responses", {}).items():
-            if str(status).startswith("2"):
-                response = self.ref(response)
-                result[str(status)] = {
-                    media: self.schema(content.get("schema", {}))
-                    for media, content in response.get("content", {}).items()
-                }
+    def responses(self, operation: dict[str, Any], statuses: set[str]) -> dict[str, Any]:
+        """Media types and schemas of the given statuses; `None` if the status is not declared."""
+        declared = {str(s): r for s, r in operation.get("responses", {}).items()}
+        result: dict[str, Any] = {}
+        for status in sorted(statuses):
+            if status not in declared:
+                result[status] = None
+                continue
+            response = self.ref(declared[status])
+            result[status] = {
+                media: self.schema(content.get("schema", {}))
+                for media, content in response.get("content", {}).items()
+            }
         return result
+
+    def success(self, operation: dict[str, Any]) -> dict[str, Any]:
+        statuses = {str(s) for s in operation.get("responses", {}) if str(s).startswith("2")}
+        return self.responses(operation, statuses)
+
+
+def error_statuses(operation: dict[str, Any]) -> set[str]:
+    """Errors the app documents (FastAPI only knows some of them, e.g. 422). Each one must match
+    the contract: PT-03 found a 422 documented in FastAPI's format instead of Problem Details."""
+    return {str(s) for s in operation.get("responses", {}) if not str(s).startswith("2")}
 
 
 @pytest.fixture(scope="module")
@@ -210,6 +223,10 @@ def test_implemented_operations_match_the_contract(
             "parameters": (expected.parameters(want), actual.parameters(have)),
             "requestBody": (expected.body(want), actual.body(have)),
             "2xx responses": (expected.success(want), actual.success(have)),
+            "error responses": (
+                expected.responses(want, error_statuses(have)),
+                actual.responses(have, error_statuses(have)),
+            ),
         }
         for name, (contract_value, app_value) in checks.items():
             if contract_value != app_value:
