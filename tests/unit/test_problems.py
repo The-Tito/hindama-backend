@@ -83,7 +83,28 @@ async def test_unknown_route_is_the_same_not_found(client: httpx.AsyncClient) ->
 
 
 async def test_method_not_allowed(client: httpx.AsyncClient) -> None:
-    assert_problem(await client.delete("/health"), 405, "request.method_not_allowed")
+    response = await client.delete("/health")
+
+    assert_problem(response, 405, "request.method_not_allowed")
+    assert response.headers["allow"] == "GET"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "allow"),
+    [
+        # Starlette answered only "GET" for these (found by Schemathesis, PT-03).
+        ("PUT", "/projects", "GET, POST"),
+        ("OPTIONS", "/projects", "GET, POST"),
+        ("PUT", "/projects/0192e3a0-aaaa-7000-8000-000000000001", "DELETE, GET, PATCH"),
+    ],
+)
+async def test_allow_lists_every_method_of_the_path(
+    client: httpx.AsyncClient, method: str, path: str, allow: str
+) -> None:
+    response = await client.request(method, path)
+
+    assert_problem(response, 405, "request.method_not_allowed")
+    assert response.headers["allow"] == allow
 
 
 async def test_field_validation_errors(client: httpx.AsyncClient) -> None:
