@@ -7,11 +7,14 @@ from uuid import UUID
 from pydantic import MISSING, Field, StringConstraints, field_validator
 
 from hindama.models.enums import Module, RunStatus, VerificationStatus
-from hindama.schemas.common import ContractModel, Warning
+from hindama.schemas.common import MULTI_LINE, SINGLE_LINE, ContractModel, Warning
 
 # RF-10. The name is trimmed before checking its length.
-Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
-Description = Annotated[str, StringConstraints(max_length=500)]
+Name = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=100, pattern=SINGLE_LINE),
+]
+Description = Annotated[str, StringConstraints(max_length=500, pattern=MULTI_LINE)]
 BaseUrl = Annotated[
     str, StringConstraints(max_length=2048), Field(json_schema_extra={"format": "uri"})
 ]

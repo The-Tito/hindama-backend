@@ -310,6 +310,12 @@ async def test_an_unresolved_host_is_accepted_with_a_momentary_warning(
         {"name": "A", "base_url": "https://a.com/" + "x" * 2048},
         {"name": "A"},
         {"name": "A", "base_url": "https://a.com", "owner_id": str(new_id())},
+        {"name": "A\u0000B", "base_url": "https://a.com"},  # was a 500 (PT-03)
+        {"name": "A\u0007B", "base_url": "https://a.com"},
+        {"name": "A\nB", "base_url": "https://a.com"},
+        {"name": "A\u007fB", "base_url": "https://a.com"},
+        {"name": "A", "description": "x\u0000y", "base_url": "https://a.com"},
+        {"name": "A", "description": "x\u001by", "base_url": "https://a.com"},
     ],
 )
 async def test_invalid_fields(ana: Analyst, body: dict[str, Any]) -> None:
@@ -317,6 +323,24 @@ async def test_invalid_fields(ana: Analyst, body: dict[str, Any]) -> None:
 
     assert response.status_code == 422
     assert response.json()["code"] == "validation.failed"
+
+
+async def test_control_characters_are_a_format_error(ana: Analyst) -> None:
+    response = await ana.request(
+        "POST", "/projects", json={"name": "A\u0000B", "base_url": "https://a.com"}
+    )
+
+    assert [(e["field"], e["code"]) for e in response.json()["errors"]] == [
+        ("name", "validation.format")
+    ]
+
+
+async def test_a_multi_line_description_is_accepted(ana: Analyst) -> None:
+    description = "Primera línea\r\n\tsegunda línea"
+
+    created = await ana.create(description=description)
+
+    assert created["description"] == description
 
 
 # ------------------------------------------------------------------ isolation (RN-02)
@@ -377,7 +401,15 @@ async def test_pagination_and_sort(ana: Analyst) -> None:
 
 
 @pytest.mark.parametrize(
-    "params", [{"page": 0}, {"page_size": 0}, {"page_size": 101}, {"sort": "owner_id"}]
+    "params",
+    [
+        {"page": 0},
+        {"page": 10_001},
+        {"page": 2**63},  # overflowed PostgreSQL's OFFSET: was a 500 (PT-03)
+        {"page_size": 0},
+        {"page_size": 101},
+        {"sort": "owner_id"},
+    ],
 )
 async def test_invalid_list_parameters(ana: Analyst, params: dict[str, Any]) -> None:
     response = await ana.request("GET", "/projects", params=params)
@@ -664,6 +696,8 @@ async def test_a_pending_project_changing_host_has_no_lost_warning(ana: Analyst)
         ({"base_url": None}, "validation.failed"),
         ({"name": None}, "validation.failed"),
         ({"name": ""}, "validation.failed"),
+        ({"name": "A\u0000B"}, "validation.failed"),
+        ({"description": "x\u0000y"}, "validation.failed"),
         ({"verification_status": "verified"}, "validation.failed"),
         ({"base_url": "http://10.0.0.1"}, "url.destination_not_allowed"),
     ],
@@ -688,11 +722,14 @@ async def test_delete_requires_the_exact_name(ana: Analyst) -> None:
 
     wrong = await ana.request("DELETE", path, params={"confirmation": "api de pedidos"})
     missing = await ana.request("DELETE", path)
+    empty = await ana.request("DELETE", path, params={"confirmation": ""})
+    control = await ana.request("DELETE", path, params={"confirmation": "API\u0000"})
 
     assert wrong.status_code == 422
     assert wrong.json()["code"] == "project.confirmation_mismatch"
-    assert missing.status_code == 422
-    assert missing.json()["code"] == "validation.failed"
+    for invalid in (missing, empty, control):
+        assert invalid.status_code == 422
+        assert invalid.json()["code"] == "validation.failed"
     assert (await ana.request("GET", path)).status_code == 200
 
 

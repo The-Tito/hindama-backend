@@ -56,7 +56,7 @@ def create_app(
 
     app = FastAPI(
         title="Hindama API",
-        version="0.2.0",
+        version="0.2.1",
         lifespan=lifespan,
         # The API is private (only Next.js reaches it); the interactive docs are for development.
         docs_url=None if settings.is_production else "/docs",

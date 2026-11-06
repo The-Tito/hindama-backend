@@ -4,10 +4,10 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, StringConstraints
 
 from hindama.core.auth import Role
-from hindama.schemas.common import ContractModel
+from hindama.schemas.common import SINGLE_LINE, ContractModel
 
 # Only documented as an email: the value comes from Cognito, which already validated it.
 Email = Annotated[str, Field(json_schema_extra={"format": "email"})]
@@ -29,4 +29,4 @@ class Me(ContractModel):
 
 
 class TermsAcceptance(ContractModel):
-    version: str
+    version: Annotated[str, StringConstraints(max_length=50, pattern=SINGLE_LINE)]

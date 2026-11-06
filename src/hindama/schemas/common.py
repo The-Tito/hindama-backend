@@ -4,6 +4,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+# Text without control characters (convenciones.md 8; PostgreSQL rejects NUL in text). Multi-line
+# fields allow tab, line feed and carriage return. Same strings as the contract's `pattern`.
+SINGLE_LINE = r"^[^\x00-\x1F\x7F]*$"
+MULTI_LINE = r"^[^\x00-\x08\x0B\x0C\x0E-\x1F\x7F]*$"
+
 
 class ContractModel(BaseModel):
     """Base of every response schema: closed, like the contract (additionalProperties: false)."""
