@@ -30,3 +30,7 @@ htmlcov/
 CLAUDE.local.md
 .claude/settings.local.json
 CLAUDE.md
+
+# Schemathesis: token de la API levantada (tests/schemathesis/run.sh) y su caché de ejemplos
+.schemathesis-token
+.schemathesis/

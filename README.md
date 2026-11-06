@@ -50,7 +50,7 @@ uv run pre-commit install        # una vez: ruff, mypy, gitleaks y revisiones b�
 | Job | Qué revisa |
 | --- | --- |
 | Lint y tipos | `ruff check`, `ruff format --check`, `mypy` (también `tests/` y `migrations/`) |
-| Pruebas, migraciones y contrato | Crea los roles con el mismo script de Compose, aplica las migraciones de ida y vuelta, `alembic check` y las pruebas con cobertura. Con `HINDAMA_FAIL_ON_SKIP=1`, una prueba omitida hace fallar el job. |
+| Pruebas, migraciones y contrato | Crea los roles con el mismo script de Compose, aplica las migraciones de ida y vuelta, `alembic check`, las pruebas con cobertura y Schemathesis contra la API levantada. Con `HINDAMA_FAIL_ON_SKIP=1`, una prueba omitida hace fallar el job. |
 | Dependencias vulnerables | `pip-audit` sobre lo que fija `uv.lock`, con hashes |
 | Imagen y Trivy | Construye la imagen y la escanea (vulnerabilidades altas o críticas con corrección disponible, y configuración insegura) |
 
@@ -58,7 +58,19 @@ Las acciones están fijadas por SHA de commit.
 
 ### Prueba de contrato
 
-[tests/contract/test_openapi_contract.py](tests/contract/test_openapi_contract.py) compara el OpenAPI que genera la app con `hindama-docs/03-api/openapi.yaml` (ADR-016). Toda operación implementada debe existir en el contrato y coincidir en `operationId`, seguridad, códigos 2xx, parámetros y esquemas de entrada y de respuesta. Las operaciones del contrato aún sin implementar solo aparecen como aviso. Por defecto lee el contrato de la carpeta hermana `../hindama-docs`; otra ruta se indica con `HINDAMA_CONTRACT_PATH`.
+[tests/contract/test_openapi_contract.py](tests/contract/test_openapi_contract.py) compara el OpenAPI que genera la app con `hindama-docs/03-api/openapi.yaml` (ADR-016). Toda operación implementada debe existir en el contrato y coincidir en `operationId`, seguridad, parámetros, esquemas de entrada, respuestas 2xx y las respuestas de error que la app documenta. Las operaciones del contrato aún sin implementar solo aparecen como aviso. Por defecto lee el contrato de la carpeta hermana `../hindama-docs`; otra ruta se indica con `HINDAMA_CONTRACT_PATH`.
+
+### Schemathesis
+
+La prueba de contrato compara documentos; [Schemathesis](https://schemathesis.readthedocs.io) prueba la API **en ejecución**. Genera cientos de peticiones a partir del contrato contra la API real (PostgreSQL de `hindama_test`, Cognito y DNS falsos) y valida cada respuesta: códigos, esquemas, cabeceras y campos de más (`additionalProperties: false`, RN-11). Se adoptó en la prueba técnica PT-03 de `hindama-docs`, donde encontró tres errores que las pruebas no veían.
+
+```bash
+# con la base levantada y las variables de "Pruebas de integración"
+tests/schemathesis/run.sh                     # semilla fija, 50 ejemplos por operación
+tests/schemathesis/run.sh --max-examples 300  # más a fondo
+```
+
+[tests/schemathesis/serve.py](tests/schemathesis/serve.py) levanta la API con su propio analista (que ya aceptó los términos) y lo borra al terminar, junto con todo lo que se creó. [schemathesis.toml](schemathesis.toml) declara los 422 de reglas de negocio que un esquema no expresa y desactiva las operaciones del contrato aún no implementadas: al implementar una, se borra su bloque.
 
 ### Entorno local con Docker Compose
 

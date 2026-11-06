@@ -1,0 +1,21 @@
+# Schemathesis (ADR-016, technical test PT-03). Run it with tests/schemathesis/run.sh.
+
+# Valid data by the schema that the API rejects on purpose with a 422: business rules a schema cannot
+# express (the terms version must be the current one, the confirmation must be the project's exact
+# name, a host label has at most 63 characters, RF-11, RF-14, RN-12).
+[checks.positive_data_acceptance]
+expected-statuses = ["2xx", "401", "403", "404", "409", "422"]
+
+# Operations of the contract not implemented yet (contract first, ADR-016). Remove each line when
+# its endpoint exists.
+[[operations]]
+include-path-regex = "/verification$"
+enabled = false
+
+[[operations]]
+include-path-regex = "/contracts"
+enabled = false
+
+[[operations]]
+include-path-regex = "/operations$"
+enabled = false
