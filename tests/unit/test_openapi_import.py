@@ -559,3 +559,25 @@ def test_warnings_are_deduplicated_and_bounded(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(openapi_import, "MAX_WARNINGS", 2)
     doc = document(servers=[{"url": f"https://s{i}.com"} for i in range(5)])
     assert len(parse(doc).warnings) == 2
+
+
+# ---------------------------------------------------------------- login candidates (RF-30)
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "expected"),
+    [
+        ("POST", "/login", True),
+        ("post", "/api/v1/auth/token", True),
+        ("POST", "/Sign-In", True),
+        ("POST", "/sessions", True),
+        ("POST", "/users/{id}/access_token", False),  # not a login segment
+        ("POST", "/auth/token/{id}", True),  # the last *fixed* segment counts
+        ("GET", "/login", False),
+        ("POST", "/orders", False),
+        ("POST", "/{tenant}", False),
+        ("POST", "/", False),
+    ],
+)
+def test_login_candidates(method: str, path: str, expected: bool) -> None:
+    assert openapi_import.is_login_candidate(method, path) is expected
