@@ -7,6 +7,7 @@ contract that are not implemented yet only produce a warning, so the contract ca
 The contract is read from HINDAMA_CONTRACT_PATH, by default the sibling hindama-docs checkout.
 """
 
+import json
 import os
 import warnings
 from pathlib import Path
@@ -54,6 +55,13 @@ COMPARED_KEYWORDS = {
 Operation = tuple[str, str]  # (METHOD, path)
 
 
+def canonical(schema: Any) -> str:
+    """A sort key independent of key order. `repr` was not: the keys come from a set
+    intersection, whose order changes with PYTHONHASHSEED, so a `oneOf` of several objects
+    compared equal in one process and different in the next."""
+    return json.dumps(schema, sort_keys=True, default=str)
+
+
 def operations(document: dict[str, Any]) -> dict[Operation, dict[str, Any]]:
     """Each operation with the parameters of its path item merged in (OpenAPI 3: the operation's
     own parameter wins when both declare the same name and location)."""
@@ -99,7 +107,7 @@ class Resolver:
             ):
                 value = self.schema(value, depth + 1)
             elif keyword in ("oneOf", "anyOf"):
-                value = sorted((self.schema(sub, depth + 1) for sub in value), key=repr)
+                value = sorted((self.schema(sub, depth + 1) for sub in value), key=canonical)
             elif keyword in ("required", "enum"):
                 value = sorted(value, key=repr)
             result[keyword] = value
