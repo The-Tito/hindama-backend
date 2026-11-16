@@ -287,7 +287,7 @@ class SafeHttpClient:
         method: str,
         url: str,
         *,
-        headers: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | Mapping[bytes, bytes] | None = None,
         content: bytes | None = None,
         follow_redirects: bool = True,
         max_response_bytes: int | None = None,

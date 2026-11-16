@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 
-from hindama.api import accounts, contracts, health, projects, verification
+from hindama.api import accounts, contracts, health, identities, projects, verification
 from hindama.api.middleware import (
     AuthenticationMiddleware,
     RequestContextMiddleware,
@@ -23,6 +23,7 @@ from hindama.config import Settings, get_settings
 from hindama.core.auth import TokenVerifier
 from hindama.core.cognito import ProfileClient
 from hindama.core.destinations import Resolver, SystemResolver
+from hindama.core.identity_probe import IdentityProber
 from hindama.core.logging import configure_logging
 from hindama.core.ownership import NetworkOwnershipChecker, OwnershipChecker, SystemTxtResolver
 from hindama.db.session import create_engine, create_session_factory
@@ -39,9 +40,11 @@ def create_app(
     profiles: ProfileClient | None = None,
     resolver: Resolver | None = None,
     ownership_checker: OwnershipChecker | None = None,
+    identity_prober: IdentityProber | None = None,
 ) -> FastAPI:
     """`verifier` and `profiles` are injected only by tests, with a fake User Pool, `resolver`
-    with a fake DNS and `ownership_checker` with a local server or scripted results."""
+    with a fake DNS, `ownership_checker` with a local server or scripted results, and
+    `identity_prober` with one that may reach a local server."""
     settings = settings or get_settings()
     configure_logging(settings.log_level, settings.log_format)
     engine = create_engine(settings)
@@ -85,6 +88,9 @@ def create_app(
         txt_resolver=SystemTxtResolver(),
         own_addresses=settings.own_ip_addresses,
     )
+    # AES-256-GCM keys of the identities' credentials (ADR-007): read once, kept only in memory.
+    app.state.credential_cipher = settings.credential_cipher()
+    app.state.identity_prober = identity_prober
 
     register_problem_handlers(app)
     # The last one added is the outermost: request context wraps authentication.
@@ -101,4 +107,5 @@ def create_app(
     app.include_router(projects.router)
     app.include_router(verification.router)
     app.include_router(contracts.router)
+    app.include_router(identities.router)
     return app

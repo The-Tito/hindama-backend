@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -366,3 +366,34 @@ async def test_deleting_the_user_deletes_everything_but_metrics(db: AsyncSession
         count = await db.scalar(select(func.count()).select_from(model))
         assert count == 0, model.__tablename__
     assert await db.get(FindingMetric, metric.id) is not None  # anonymous metrics survive
+
+
+async def test_a_user_whose_actions_are_recorded_can_be_deleted(db: AsyncSession) -> None:
+    """RF-88. The analyst's own history (a risk accepted, a policy confirmed) points to the user
+    from two levels below the cascade users -> projects. The check waits for COMMIT; here SET
+    CONSTRAINTS IMMEDIATE stands in for it, inside the transaction the test rolls back."""
+    project, identity, the_run, metric = await _finding_graph(db)
+    the_finding = finding(project, identity, the_run, metric)
+    confirmed = operation(project, "/orders")
+    confirmed.modified_by = project.owner_id
+    confirmed.modified_at = NOW
+    db.add_all([the_finding, confirmed])
+    await db.flush()
+    db.add(
+        FindingEvent(
+            project_id=project.id,
+            finding_id=the_finding.id,
+            from_status="new",
+            to_status="accepted_risk",
+            reason="accepted",
+            user_id=project.owner_id,
+            justification="Riesgo aceptado por negocio.",
+        )
+    )
+    await db.flush()
+
+    await db.execute(delete(User).where(User.id == project.owner_id))
+    await db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+    remaining = select(func.count()).where(FindingEvent.finding_id == the_finding.id)
+    assert await db.scalar(remaining) == 0

@@ -75,7 +75,7 @@ tests/schemathesis/run.sh --max-examples 300  # más a fondo
 ### Entorno local con Docker Compose
 
 ```bash
-cp .env.example .env               # y cambia cada contraseña
+cp .env.example .env               # y cambia cada contraseña y la llave de credenciales
 docker compose up --build          # PostgreSQL 16 + API en http://localhost:8000
 curl localhost:8000/health         # {"status":"ok"}
 ```
@@ -115,6 +115,15 @@ uv run pytest
 ### Configuración
 
 Se lee de variables de entorno con el prefijo `HINDAMA_` (ver `src/hindama/config.py`). Se arranca con `--no-access-log` porque el registro de uvicorn incluye la query string; la API escribe su propio registro de cada petición.
+
+### Credenciales de las identidades
+
+Las credenciales de las identidades de prueba se cifran con AES-256-GCM antes de guardarse ([ADR-007](../hindama-docs/01-arquitectura/decisiones/ADR-007-cifrado-de-credenciales-aes-gcm.md); [src/hindama/core/credentials.py](src/hindama/core/credentials.py)). La llave maestra nunca va en la base ni en el código:
+
+- `HINDAMA_CREDENTIAL_KEYS`: mapa JSON de versión a llave de 32 bytes en base64, por ejemplo `{"1":"…"}`. Sin él, la API no arranca.
+- `HINDAMA_CREDENTIAL_KEY_VERSION`: la versión con la que se cifran las credenciales nuevas.
+- Genera una llave con `python -c "import base64,os; print(base64.b64encode(os.urandom(32)).decode())"`. En producción viene de SSM Parameter Store (`/hindama/backend/credential-keys`).
+- **Rotar:** agrega la versión nueva, cambia la versión vigente, vuelve a cifrar las filas y después retira la anterior. Perder una llave deja ilegibles las credenciales cifradas con ella; la prueba de una identidad así responde 500 sin detalles.
 
 ### Autenticación
 
