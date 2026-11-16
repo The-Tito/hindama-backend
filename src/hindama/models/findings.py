@@ -139,6 +139,10 @@ class FindingEvent(Base):
     to_status: Mapped[str]
     reason: Mapped[str]
     run_id: Mapped[UUID | None]
-    user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    # Deferred: deleting the user cascades through projects and reaches these rows only at the
+    # second level, after a NO ACTION check would already have failed (RF-88).
+    user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", deferrable=True, initially="DEFERRED")
+    )
     justification: Mapped[str | None]
     occurred_at: Mapped[datetime] = created_at()

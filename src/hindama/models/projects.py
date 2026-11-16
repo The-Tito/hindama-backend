@@ -145,7 +145,9 @@ class Operation(Base):
     owner_field: Mapped[str | None]
     confirmed_at: Mapped[datetime | None]
     modified_at: Mapped[datetime | None]
-    modified_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    modified_by: Mapped[UUID | None] = mapped_column(  # deferred, as finding_events.user_id
+        ForeignKey("users.id", deferrable=True, initially="DEFERRED")
+    )
     resource_parameters: Mapped[list[Any]] = mapped_column(
         JSONB, server_default=text("'[]'::jsonb")
     )
