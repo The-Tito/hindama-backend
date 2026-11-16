@@ -7,8 +7,10 @@ from fastapi import FastAPI
 from pydantic import SecretStr
 
 from hindama.config import Settings
+from hindama.core.ownership import OwnershipChecker
 from hindama.main import create_app
 from tests.dns import FakeResolver
+from tests.ownership import ScriptedChecker
 from tests.tokens import CLIENT_ID, REGION, USER_POOL_ID, FakeUserPool
 
 # In CI every test must run: a missing variable would otherwise skip the RLS tests silently.
@@ -57,12 +59,24 @@ def resolver() -> FakeResolver:
 
 
 @pytest.fixture
-def app(settings: Settings, user_pool: FakeUserPool, resolver: FakeResolver) -> FastAPI:
+def ownership_checker() -> OwnershipChecker:
+    """No network by default; the verification tests override it with a local server."""
+    return ScriptedChecker()
+
+
+@pytest.fixture
+def app(
+    settings: Settings,
+    user_pool: FakeUserPool,
+    resolver: FakeResolver,
+    ownership_checker: OwnershipChecker,
+) -> FastAPI:
     return create_app(
         settings,
         verifier=user_pool.verifier(),
         profiles=user_pool.profile_client(),
         resolver=resolver,
+        ownership_checker=ownership_checker,
     )
 
 

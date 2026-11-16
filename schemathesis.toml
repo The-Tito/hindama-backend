@@ -9,10 +9,6 @@ expected-statuses = ["2xx", "401", "403", "404", "409", "422"]
 # Operations of the contract not implemented yet (contract first, ADR-016). Remove each line when
 # its endpoint exists.
 [[operations]]
-include-path-regex = "/verification$"
-enabled = false
-
-[[operations]]
 include-path-regex = "/contracts"
 enabled = false
 

@@ -76,9 +76,15 @@ class DestinationBlockedError(Exception):
 
 
 class ResponseTooLargeError(Exception):
-    def __init__(self, limit: int) -> None:
+    def __init__(self, limit: int, status_code: int) -> None:
         super().__init__(f"response larger than {limit} bytes")
         self.limit = limit
+        self.status_code = status_code  # a big 404 page is not a big file
+
+
+# Timeouts, refused connections and TLS failures (a certificate that does not match included), for
+# callers that cannot import httpx (rule TID251).
+NetworkError = httpx.TransportError
 
 
 # ---------------------------------------------------------------- transport
@@ -348,12 +354,12 @@ class SafeHttpClient:
         """Step 5. Counts decoded bytes, so a compressed bomb is cut too."""
         declared = response.headers.get("content-length", "")
         if declared.isdigit() and int(declared) > limit:
-            raise ResponseTooLargeError(limit)
+            raise ResponseTooLargeError(limit, response.status_code)
         body = bytearray()
         async for chunk in response.aiter_bytes():
             body.extend(chunk)
             if len(body) > limit:
-                raise ResponseTooLargeError(limit)
+                raise ResponseTooLargeError(limit, response.status_code)
         return bytes(body)
 
     def _blocked_error(self, reason: BlockReason, host: str) -> DestinationBlockedError:

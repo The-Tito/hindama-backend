@@ -24,6 +24,7 @@ from hindama.main import create_app
 from hindama.models import User
 from tests.conftest import make_settings
 from tests.dns import FakeResolver
+from tests.ownership import ScriptedChecker
 from tests.tokens import FakeUserPool
 
 # Its own analyst: never the default `sub` of the integration tests.
@@ -60,6 +61,7 @@ async def main() -> None:
         verifier=pool.verifier(),
         profiles=pool.profile_client(),
         resolver=FakeResolver(),
+        ownership_checker=ScriptedChecker(),  # never reaches the hosts Schemathesis invents
     )
     token = pool.token(sub=SUB)
     server = uvicorn.Server(uvicorn.Config(app, host=HOST, port=PORT, log_level="warning"))

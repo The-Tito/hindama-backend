@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 
-from hindama.api import accounts, health, projects
+from hindama.api import accounts, health, projects, verification
 from hindama.api.middleware import AuthenticationMiddleware, RequestContextMiddleware
 from hindama.api.openapi import install_openapi
 from hindama.api.problems import register_problem_handlers
@@ -19,6 +19,7 @@ from hindama.core.auth import TokenVerifier
 from hindama.core.cognito import ProfileClient
 from hindama.core.destinations import Resolver, SystemResolver
 from hindama.core.logging import configure_logging
+from hindama.core.ownership import NetworkOwnershipChecker, OwnershipChecker, SystemTxtResolver
 from hindama.db.session import create_engine, create_session_factory
 
 
@@ -27,9 +28,10 @@ def create_app(
     verifier: TokenVerifier | None = None,
     profiles: ProfileClient | None = None,
     resolver: Resolver | None = None,
+    ownership_checker: OwnershipChecker | None = None,
 ) -> FastAPI:
-    """`verifier` and `profiles` are injected only by tests, with a fake User Pool, and `resolver`
-    with a fake DNS."""
+    """`verifier` and `profiles` are injected only by tests, with a fake User Pool, `resolver`
+    with a fake DNS and `ownership_checker` with a local server or scripted results."""
     settings = settings or get_settings()
     configure_logging(settings.log_level, settings.log_format)
     engine = create_engine(settings)
@@ -68,6 +70,11 @@ def create_app(
     app.state.session_factory = create_session_factory(engine)
     app.state.profiles = profiles
     app.state.resolver = resolver or SystemResolver()
+    app.state.ownership_checker = ownership_checker or NetworkOwnershipChecker(
+        resolver=app.state.resolver,
+        txt_resolver=SystemTxtResolver(),
+        own_addresses=settings.own_ip_addresses,
+    )
 
     register_problem_handlers(app)
     # The last one added is the outermost: request context wraps authentication.
@@ -80,4 +87,5 @@ def create_app(
     app.include_router(health.router)
     app.include_router(accounts.router)
     app.include_router(projects.router)
+    app.include_router(verification.router)
     return app
