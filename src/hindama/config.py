@@ -1,10 +1,14 @@
 """Application settings, read from environment variables (secrets never live in code)."""
 
+import base64
+import binascii
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, IPvAnyAddress, SecretStr
+from pydantic import Field, IPvAnyAddress, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from hindama.core.credentials import KEY_BYTES, CredentialCipher
 
 
 class Settings(BaseSettings):
@@ -13,7 +17,10 @@ class Settings(BaseSettings):
     Every variable uses the `HINDAMA_` prefix, e.g. `HINDAMA_DATABASE_URL`.
     """
 
-    model_config = SettingsConfigDict(env_prefix="HINDAMA_", extra="ignore")
+    # A configuration error must not print what it read: it may hold keys and passwords.
+    model_config = SettingsConfigDict(
+        env_prefix="HINDAMA_", extra="ignore", hide_input_in_errors=True
+    )
 
     environment: Literal["development", "test", "production"] = "development"
 
@@ -40,6 +47,32 @@ class Settings(BaseSettings):
     # Hindama's own public addresses (the Elastic IPs of frontend and backend): nobody may point the
     # platform at itself (ADR-008). JSON list, e.g. ["203.0.113.10", "203.0.113.11"].
     own_ip_addresses: list[IPvAnyAddress] = Field(default_factory=list)
+
+    # AES-256-GCM master keys of the identities' credentials (ADR-007), by version, base64-encoded:
+    # {"1": "<32 bytes in base64>"}. New credentials use `credential_key_version`; older versions
+    # stay loaded until a rotation re-encrypts their rows. Never in the database or in code.
+    credential_keys: dict[int, SecretStr] = Field(min_length=1)
+    credential_key_version: int = Field(default=1, ge=1, le=255)
+
+    @model_validator(mode="after")
+    def _check_credential_keys(self) -> "Settings":
+        # Only the version is named in errors: pydantic would otherwise echo the input value.
+        for version, key in self.credential_keys.items():
+            if not 1 <= version <= 255:
+                raise ValueError(f"credential key version {version} must go from 1 to 255")
+            try:
+                raw = base64.b64decode(key.get_secret_value(), validate=True)
+            except binascii.Error:
+                raise ValueError(f"credential key {version} is not valid base64") from None
+            if len(raw) != KEY_BYTES:
+                raise ValueError(f"credential key {version} must be {KEY_BYTES} bytes long")
+        if self.credential_key_version not in self.credential_keys:
+            raise ValueError("credential_key_version is not among credential_keys")
+        return self
+
+    def credential_cipher(self) -> CredentialCipher:
+        keys = {v: base64.b64decode(k.get_secret_value()) for v, k in self.credential_keys.items()}
+        return CredentialCipher(keys, self.credential_key_version)
 
     @property
     def is_production(self) -> bool:

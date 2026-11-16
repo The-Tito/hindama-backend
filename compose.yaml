@@ -63,6 +63,9 @@ services:
       HINDAMA_COGNITO_CLIENT_ID: ${HINDAMA_COGNITO_CLIENT_ID:?set it in .env}
       HINDAMA_TERMS_VERSION: ${HINDAMA_TERMS_VERSION:-2026-10-30}
       HINDAMA_OWN_IP_ADDRESSES: ${HINDAMA_OWN_IP_ADDRESSES:-[]}
+      # Without them the API refuses to start (ADR-007); see .env.example.
+      HINDAMA_CREDENTIAL_KEYS: ${HINDAMA_CREDENTIAL_KEYS:-}
+      HINDAMA_CREDENTIAL_KEY_VERSION: ${HINDAMA_CREDENTIAL_KEY_VERSION:-1}
       # Development only: the mounted source wins over the installed package, for --reload.
       PYTHONPATH: /app/src
     volumes:

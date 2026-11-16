@@ -1,3 +1,4 @@
+import base64
 import os
 from collections.abc import AsyncIterator
 
@@ -31,6 +32,10 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
+# A fresh key per test session: no test credential outlives it.
+TEST_CREDENTIAL_KEY = base64.b64encode(os.urandom(32)).decode()
+
+
 def make_settings(database_url: str) -> Settings:
     return Settings(
         environment="test",
@@ -39,6 +44,7 @@ def make_settings(database_url: str) -> Settings:
         cognito_region=REGION,
         cognito_user_pool_id=USER_POOL_ID,
         cognito_client_id=CLIENT_ID,
+        credential_keys={1: SecretStr(TEST_CREDENTIAL_KEY)},
     )
 
 

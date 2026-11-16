@@ -168,3 +168,4 @@ Borrar un pool elimina todas sus cuentas y no se puede deshacer. Primero desacti
 - [ ] Ningún recurso se creó con la cuenta raíz.
 - [ ] Cognito: los puntos de la sección 2.6.
 - [ ] Ningún secreto aparece en el repositorio, en un `.env` versionado ni en la salida de la CI.
+- [ ] La llave maestra de credenciales (ADR-007) está en SSM como SecureString (`/hindama/backend/credential-keys`, JSON `{"1":"<32 bytes en base64>"}`), generada en la máquina de un integrante con `os.urandom(32)`, nunca en un chat ni en un correo. Hay una copia fuera de línea junto a la llave privada de los respaldos: sin ella, una base restaurada en la cuenta de respaldo tiene las credenciales ilegibles.
