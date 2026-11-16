@@ -1,6 +1,5 @@
-# Local development: PostgreSQL 16 and the API.
+# Local development: PostgreSQL 16, Redis, the API and the scanner.
 # Usage: cp .env.example .env  (and change every password), then  docker compose up --build
-# Redis and the scanner join when a use case needs them (rate limit, CU-12).
 
 name: hindama
 
@@ -25,6 +24,36 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
+
+  # Queue of runs (ADR-012). Password, append-only file and no eviction: a lost job would leave a
+  # run queued (architecture 2.3, ADR-003). Port only on this machine, for the tests.
+  redis:
+    image: redis:7.4-bookworm
+    environment:
+      HINDAMA_REDIS_PASSWORD: ${HINDAMA_REDIS_PASSWORD:?set it in .env}
+      REDISCLI_AUTH: ${HINDAMA_REDIS_PASSWORD}
+    # Through the shell so the password comes from the environment, not from the compose file.
+    command:
+      - sh
+      - -c
+      - >-
+        exec redis-server --requirepass "$$HINDAMA_REDIS_PASSWORD" --appendonly yes
+        --maxmemory 100mb --maxmemory-policy noeviction
+    volumes:
+      - redis-data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 128m
+    user: redis  # owns /data in the image; no capabilities needed
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   # Runs `alembic upgrade head` as the schema owner, then exits. The API waits for it.
@@ -53,11 +82,14 @@ services:
         condition: service_healthy
       migrations:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     environment:
       HINDAMA_ENVIRONMENT: ${HINDAMA_ENVIRONMENT:-development}
       HINDAMA_LOG_LEVEL: ${HINDAMA_LOG_LEVEL:-INFO}
       HINDAMA_LOG_FORMAT: ${HINDAMA_LOG_FORMAT:-console}
       HINDAMA_DATABASE_URL: postgresql+asyncpg://hindama_api:${HINDAMA_API_DB_PASSWORD}@db:5432/hindama
+      HINDAMA_REDIS_URL: redis://:${HINDAMA_REDIS_PASSWORD}@redis:6379/0
       HINDAMA_COGNITO_REGION: ${HINDAMA_COGNITO_REGION:?set it in .env}
       HINDAMA_COGNITO_USER_POOL_ID: ${HINDAMA_COGNITO_USER_POOL_ID:?set it in .env}
       HINDAMA_COGNITO_CLIENT_ID: ${HINDAMA_COGNITO_CLIENT_ID:?set it in .env}
@@ -88,5 +120,39 @@ services:
     mem_limit: 512m
     restart: unless-stopped
 
+  # Test engine (ADR-012): executes the queued runs, as hindama_scanner. No ports.
+  scanner:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      HINDAMA_ENVIRONMENT: ${HINDAMA_ENVIRONMENT:-development}
+      HINDAMA_LOG_LEVEL: ${HINDAMA_LOG_LEVEL:-INFO}
+      HINDAMA_LOG_FORMAT: ${HINDAMA_LOG_FORMAT:-console}
+      HINDAMA_DATABASE_URL: postgresql+asyncpg://hindama_scanner:${HINDAMA_SCANNER_DB_PASSWORD}@db:5432/hindama
+      HINDAMA_REDIS_URL: redis://:${HINDAMA_REDIS_PASSWORD}@redis:6379/0
+      HINDAMA_OWN_IP_ADDRESSES: ${HINDAMA_OWN_IP_ADDRESSES:-[]}
+      PYTHONPATH: /app/src
+    volumes:
+      - ./src:/app/src:ro
+    command: ["python", "-m", "hindama.scanner"]
+    healthcheck:
+      disable: true  # the image's check calls the API's /health
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # Architecture 2.3: the scanner never leaves the API without memory.
+    mem_limit: 768m
+    restart: unless-stopped
+
 volumes:
   db-data:
+  redis-data:
