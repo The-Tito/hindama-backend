@@ -20,6 +20,7 @@ from hindama.models import (
     DailyMetric,
     Finding,
     FindingMetric,
+    FindingOccurrence,
     Identity,
     Operation,
     Project,
@@ -461,7 +462,7 @@ async def seed_activity(owner: AsyncEngine, project_id: UUID) -> None:
             Run(
                 project_id=project_id,
                 number=1,
-                config={},
+                config={"modules": ["configuration"]},
                 status="completed",
                 end_reason="normal",
                 started_at=NOW - timedelta(hours=2),
@@ -470,7 +471,7 @@ async def seed_activity(owner: AsyncEngine, project_id: UUID) -> None:
             Run(
                 project_id=project_id,
                 number=2,
-                config={},
+                config={"modules": ["configuration"]},
                 status="completed",
                 end_reason="normal",
                 started_at=NOW - timedelta(minutes=30),
@@ -496,26 +497,37 @@ async def seed_activity(owner: AsyncEngine, project_id: UUID) -> None:
             )
             db.add(metric)
             await db.flush()
-            db.add(
-                Finding(
-                    project_id=project_id,
-                    module="configuration",
-                    finding_type=f"configuration.test.{index}",
-                    identity_id=anonymous.id,
-                    severity=severity,
-                    owasp_category="API8",
-                    title="Prueba",
-                    recommendation="Corregir.",
-                    status=status,
-                    dismissal_reason="accepted_risk" if status == "accepted_risk" else None,
-                    justification="Aceptado." if status == "accepted_risk" else None,
-                    resolution_reason="not_detected" if status == "resolved" else None,
-                    resolved_at=NOW if status == "resolved" else None,
-                    first_run_id=runs[0].id,
-                    last_run_id=runs[1].id,
-                    metric_id=metric.id,
-                )
+            finding = Finding(
+                project_id=project_id,
+                module="configuration",
+                finding_type=f"configuration.test.{index}",
+                identity_id=anonymous.id,
+                severity=severity,
+                owasp_category="API8",
+                title="Prueba",
+                recommendation="Corregir.",
+                status=status,
+                dismissal_reason="accepted_risk" if status == "accepted_risk" else None,
+                justification="Aceptado." if status == "accepted_risk" else None,
+                resolution_reason="not_detected" if status == "resolved" else None,
+                resolved_at=NOW if status == "resolved" else None,
+                first_run_id=runs[0].id,
+                last_run_id=runs[1].id,
+                metric_id=metric.id,
             )
+            db.add(finding)
+            if status != "resolved":  # run 2 detected it again; accepted risk too (modelo.md 6)
+                await db.flush()
+                db.add(
+                    FindingOccurrence(
+                        finding_id=finding.id,
+                        run_id=runs[1].id,
+                        project_id=project_id,
+                        severity=severity,
+                        explanation="Prueba.",
+                        evidence={},
+                    )
+                )
 
 
 async def test_dashboard_with_activity(ana: Analyst, owner: AsyncEngine) -> None:
@@ -531,6 +543,18 @@ async def test_dashboard_with_activity(ana: Analyst, owner: AsyncEngine) -> None
     assert body["current_contract"]["operation_count"] == 18
     assert body["last_run"]["number"] == 2
     assert body["last_run"]["status"] == "completed"
+    assert body["last_run"]["end_reason"] == "normal"
+    assert body["last_run"]["modules"] == ["configuration"]
+    assert body["last_run"]["requests_sent"] == 0
+    assert body["last_run"]["started_at"] is not None
+    assert body["last_run"]["findings_by_severity"] == {  # its occurrences, not open findings
+        "critical": 1,
+        "high": 2,
+        "medium": 1,
+        "low": 0,
+        "info": 0,
+        "total": 4,
+    }
     assert body["open_findings_by_severity"] == {
         "critical": 1,
         "high": 2,
@@ -564,7 +588,7 @@ async def test_concluded_needs_a_completed_run_and_no_open_findings(
             Run(
                 project_id=project_id,
                 number=1,
-                config={},
+                config={"modules": ["configuration"]},
                 status="completed",
                 end_reason="normal",
                 finished_at=NOW,
@@ -709,7 +733,14 @@ async def test_delete_removes_everything(ana: Analyst, owner: AsyncEngine) -> No
 async def test_delete_with_an_active_run_is_a_conflict(ana: Analyst, owner: AsyncEngine) -> None:
     created = await ana.create()
     async with await owner_session(owner) as db, db.begin():
-        db.add(Run(project_id=UUID(created["id"]), number=1, config={}, status="running"))
+        db.add(
+            Run(
+                project_id=UUID(created["id"]),
+                number=1,
+                config={"modules": ["configuration"]},
+                status="running",
+            )
+        )
 
     response = await ana.request(
         "DELETE", f"/projects/{created['id']}", params={"confirmation": "API de pedidos"}

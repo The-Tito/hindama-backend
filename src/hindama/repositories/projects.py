@@ -14,7 +14,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 from sqlalchemy.sql.elements import ColumnElement
 
-from hindama.models import ContractVersion, Finding, Identity, Operation, Project, Resource, Run
+from hindama.models import (
+    ContractVersion,
+    Finding,
+    FindingOccurrence,
+    Identity,
+    Operation,
+    Project,
+    Resource,
+    Run,
+)
 from hindama.models.enums import (
     ACTIVE_RUN_STATUSES,
     OPEN_FINDING_STATUSES,
@@ -172,6 +181,19 @@ async def current_contract(session: AsyncSession, project_id: UUID) -> ContractV
 async def last_run(session: AsyncSession, project_id: UUID) -> Run | None:
     statement = select(Run).where(Run.project_id == project_id).order_by(Run.number.desc()).limit(1)
     return await session.scalar(statement)
+
+
+async def run_findings_by_severity(session: AsyncSession, run_id: UUID) -> dict[Severity, int]:
+    """Failures detected in one run (RF-63): its occurrences, by the severity they had then."""
+    statement = (
+        select(FindingOccurrence.severity, func.count())
+        .where(FindingOccurrence.run_id == run_id)
+        .group_by(FindingOccurrence.severity)
+    )
+    counts = {
+        Severity(severity): int(count) for severity, count in await session.execute(statement)
+    }
+    return {severity: counts.get(severity, 0) for severity in Severity}
 
 
 async def open_findings_by_severity(session: AsyncSession, project_id: UUID) -> dict[Severity, int]:

@@ -1,5 +1,6 @@
 """`/projects` and `/projects/{project_id}` (CU-05, CU-06; RF-10 to RF-16)."""
 
+from collections.abc import Mapping
 from typing import Annotated
 from uuid import UUID
 
@@ -23,7 +24,7 @@ from hindama.schemas.projects import (
     SeverityCount,
 )
 from hindama.services import projects as service
-from hindama.services.projects import WARNING_MESSAGES, Dashboard, UrlPolicy
+from hindama.services.projects import WARNING_MESSAGES, Dashboard, UrlPolicy, run_modules
 
 router = APIRouter(tags=["Projects"])
 
@@ -41,6 +42,17 @@ def get_url_policy(request: Request) -> UrlPolicy:
 
 
 Destinations = Annotated[UrlPolicy, Depends(get_url_policy)]
+
+
+def _severity_count(counts: Mapping[Severity, int]) -> SeverityCount:
+    return SeverityCount(
+        critical=counts[Severity.CRITICAL],
+        high=counts[Severity.HIGH],
+        medium=counts[Severity.MEDIUM],
+        low=counts[Severity.LOW],
+        info=counts[Severity.INFO],
+        total=sum(counts.values()),
+    )
 
 
 def _project(view: Dashboard) -> Project:
@@ -73,17 +85,15 @@ def _project(view: Dashboard) -> Project:
             id=run.id,
             number=run.number,
             status=run.status,
+            end_reason=run.end_reason,
+            modules=run_modules(run.config),
+            requests_sent=run.requests_sent,
+            findings_by_severity=_severity_count(view.last_run_findings),
             created_at=run.created_at,
+            started_at=run.started_at,
             finished_at=run.finished_at,
         ),
-        open_findings_by_severity=SeverityCount(
-            critical=counts[Severity.CRITICAL],
-            high=counts[Severity.HIGH],
-            medium=counts[Severity.MEDIUM],
-            low=counts[Severity.LOW],
-            info=counts[Severity.INFO],
-            total=sum(counts.values()),
-        ),
+        open_findings_by_severity=_severity_count(counts),
         modules=[
             ModuleAvailability(
                 module=m.module,

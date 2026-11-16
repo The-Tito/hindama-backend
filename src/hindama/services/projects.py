@@ -1,8 +1,9 @@
 """Projects (F-02): CU-05 create, CU-06 list, dashboard, edit and delete."""
 
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -104,6 +105,7 @@ class Dashboard:
     concluded: bool
     current_contract: ContractVersion | None
     last_run: Run | None
+    last_run_findings: dict[Severity, int]  # zeros when there is no run
     open_findings: dict[Severity, int]
     modules: list[Availability]
     warnings: list[str] = field(default_factory=list)  # codes; persistent ones included
@@ -168,6 +170,12 @@ def module_availability(
     ]
 
 
+def run_modules(config: Mapping[str, Any]) -> list[Module]:
+    """The run's modules in catalog order. `config` keeps them as validated (modelo.md 3.3)."""
+    chosen = set(config.get("modules", []))
+    return [module for module in Module if module in chosen]
+
+
 def persistent_warnings(project: Project) -> list[str]:
     return ["url.no_tls"] if project.base_url.startswith("http://") else []
 
@@ -186,11 +194,15 @@ async def _dashboard(session: AsyncSession, row: ProjectRow, momentary: list[str
     contract = await repository.current_contract(session, project.id)
     config = await repository.configuration(session, project.id)
     verified = project.verification_status == VerificationStatus.VERIFIED
+    run = await repository.last_run(session, project.id)
     return Dashboard(
         project=project,
         concluded=row.concluded,
         current_contract=contract,
-        last_run=await repository.last_run(session, project.id),
+        last_run=run,
+        last_run_findings=await repository.run_findings_by_severity(session, run.id)
+        if run is not None
+        else dict.fromkeys(Severity, 0),
         open_findings=await repository.open_findings_by_severity(session, project.id),
         modules=module_availability(verified, contract is not None, config),
         warnings=persistent_warnings(project) + momentary,

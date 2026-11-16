@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import MISSING, Field, StringConstraints, field_validator
 
-from hindama.models.enums import Module, RunStatus, VerificationStatus
+from hindama.models.enums import EndReason, Module, RunStatus, VerificationStatus
 from hindama.schemas.common import MULTI_LINE, SINGLE_LINE, ContractModel, Warning
 
 # RF-10. The name is trimmed before checking its length.
@@ -55,14 +55,6 @@ class ContractVersionSummary(ContractModel):
     imported_at: datetime
 
 
-class RunSummary(ContractModel):
-    id: UUID
-    number: int = Field(ge=1)
-    status: RunStatus
-    created_at: datetime
-    finished_at: datetime | None
-
-
 class SeverityCount(ContractModel):
     critical: int = Field(ge=0)
     high: int = Field(ge=0)
@@ -70,6 +62,21 @@ class SeverityCount(ContractModel):
     low: int = Field(ge=0)
     info: int = Field(ge=0)
     total: int = Field(ge=0)
+
+
+class RunSummary(ContractModel):
+    """RF-63: an item of `listRuns` and the dashboard's `last_run` (contract 0.4.0)."""
+
+    id: UUID
+    number: int = Field(ge=1)
+    status: RunStatus
+    end_reason: EndReason | None
+    modules: Annotated[list[Module], Field(min_length=1, json_schema_extra={"uniqueItems": True})]
+    requests_sent: int = Field(ge=0)
+    findings_by_severity: SeverityCount
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
 
 
 MissingRequirement = Literal[
