@@ -9,7 +9,6 @@ import asyncio
 import ipaddress
 import socket
 import ssl
-import threading
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
@@ -18,13 +17,11 @@ import httpx
 import pytest
 import structlog
 import trustme
-import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from hindama.core.destinations import IPAddress, UnresolvedHostError, is_blocked
 from hindama.core.safe_http import (
     USER_AGENT,
     BlockReason,
@@ -34,10 +31,18 @@ from hindama.core.safe_http import (
     ResponseTooLargeError,
     SafeHttpClient,
 )
-
-HOST = "api.hindama.test"
-LOOPBACK = "127.0.0.1"
-
+from tests.servers import (
+    HOST,
+    LOOPBACK,
+    LocalServer,
+    ScriptedResolver,
+    UnresolvedResolver,
+    allow_loopback,
+    trusting,
+)
+from tests.servers import (
+    https_server as serve_https,
+)
 
 # ---------------------------------------------------------------- the "user's API"
 
@@ -96,30 +101,6 @@ APP = Starlette(
 )
 
 
-class LocalServer:
-    def __init__(self, **ssl_files: str) -> None:
-        self._socket = socket.socket()
-        self._socket.bind((LOOPBACK, 0))
-        self.port: int = self._socket.getsockname()[1]
-        config = uvicorn.Config(APP, log_level="warning", lifespan="off", **ssl_files)  # type: ignore[arg-type]
-        self._server = uvicorn.Server(config)
-        self._thread = threading.Thread(
-            target=self._server.run, kwargs={"sockets": [self._socket]}, daemon=True
-        )
-
-    def __enter__(self) -> "LocalServer":
-        self._thread.start()
-        for _ in range(200):
-            if self._server.started:
-                return self
-            threading.Event().wait(0.01)
-        raise RuntimeError("the local server did not start")
-
-    def __exit__(self, *_: object) -> None:
-        self._server.should_exit = True
-        self._thread.join(timeout=5)
-
-
 @pytest.fixture(scope="module")
 def ca() -> trustme.CA:
     return trustme.CA()
@@ -127,49 +108,22 @@ def ca() -> trustme.CA:
 
 @pytest.fixture(scope="module")
 def https_server(ca: trustme.CA, tmp_path_factory: pytest.TempPathFactory) -> Iterator[LocalServer]:
-    pem = Path(tmp_path_factory.mktemp("tls")) / "server.pem"
-    ca.issue_cert(HOST).private_key_and_cert_chain_pem.write_to_path(str(pem))
-    with LocalServer(ssl_certfile=str(pem), ssl_keyfile=str(pem)) as server:
+    with serve_https(APP, ca, Path(tmp_path_factory.mktemp("tls"))) as server:
         yield server
 
 
 @pytest.fixture(scope="module")
 def http_server() -> Iterator[LocalServer]:
-    with LocalServer() as server:
+    with LocalServer(APP) as server:
         yield server
 
 
 @pytest.fixture
 def trusted(ca: trustme.CA) -> ssl.SSLContext:
-    context = ssl.create_default_context()
-    ca.configure_trust(context)
-    return context
+    return trusting(ca)
 
 
-# ---------------------------------------------------------------- resolvers and policy
-
-
-class ScriptedResolver:
-    """Answers in order (the last answer repeats) and records every query."""
-
-    def __init__(self, *answers: list[str]) -> None:
-        self.answers = answers
-        self.queries: list[str] = []
-
-    async def resolve(self, host: str) -> list[IPAddress]:
-        self.queries.append(host)
-        answer = self.answers[min(len(self.queries), len(self.answers)) - 1]
-        return [ipaddress.ip_address(a) for a in answer]
-
-
-class UnresolvedResolver:
-    async def resolve(self, host: str) -> list[IPAddress]:
-        raise UnresolvedHostError(host)
-
-
-def allow_loopback(address: IPAddress) -> bool:
-    """Production policy except loopback, where the local server listens."""
-    return is_blocked(address) and not address.is_loopback
+# ---------------------------------------------------------------- client
 
 
 def client(
