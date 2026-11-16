@@ -22,6 +22,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from hindama.core import safe_http
 from hindama.core.safe_http import (
     USER_AGENT,
     BlockReason,
@@ -250,6 +251,8 @@ async def test_ip_literals_are_checked_without_dns(http_server: LocalServer) -> 
         (f"ftp://{HOST}/ok", BlockReason.SCHEME_NOT_ALLOWED),
         ("file:///etc/passwd", BlockReason.SCHEME_NOT_ALLOWED),
         (f"https://usuario:clave@{HOST}/ok", BlockReason.INVALID_URL),
+        (f"https://{HOST}:99999/ok", BlockReason.INVALID_URL),  # httpx accepts it; connect() fails
+        (f"https://{HOST}:0/ok", BlockReason.INVALID_URL),
     ],
 )
 async def test_only_the_bound_host_over_http_or_https(url: str, reason: BlockReason) -> None:
@@ -270,7 +273,9 @@ async def test_a_host_that_does_not_resolve_is_blocked() -> None:
     assert blocked.value.reason is BlockReason.UNRESOLVED
 
 
-async def test_every_block_is_logged() -> None:
+async def test_every_block_is_logged(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A logger cached by an earlier test ignores capture_logs: use a fresh one.
+    monkeypatch.setattr(safe_http, "log", structlog.get_logger("hindama.safe_http"))
     with structlog.testing.capture_logs() as logs:
         async with client() as safe:
             with pytest.raises(DestinationBlockedError):

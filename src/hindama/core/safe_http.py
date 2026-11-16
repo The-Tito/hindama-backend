@@ -85,6 +85,8 @@ class ResponseTooLargeError(Exception):
 # Timeouts, refused connections and TLS failures (a certificate that does not match included), for
 # callers that cannot import httpx (rule TID251).
 NetworkError = httpx.TransportError
+# A URL httpx cannot parse (a port out of range, an invalid host...).
+InvalidUrl = httpx.InvalidURL
 
 
 # ---------------------------------------------------------------- transport
@@ -332,7 +334,7 @@ class SafeHttpClient:
         host = self._host_of(url)
         if url.scheme not in ALLOWED_SCHEMES:
             raise self._blocked_error(BlockReason.SCHEME_NOT_ALLOWED, host)
-        if not host or url.userinfo:
+        if not host or url.userinfo or (url.port is not None and not 0 < url.port < 65536):
             raise self._blocked_error(BlockReason.INVALID_URL, host)
         if host != self.host:
             raise self._blocked_error(BlockReason.HOST_MISMATCH, host)
