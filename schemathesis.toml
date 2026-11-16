@@ -7,11 +7,7 @@
 expected-statuses = ["2xx", "401", "403", "404", "409", "422"]
 
 # Operations of the contract not implemented yet (contract first, ADR-016). Remove each block when
-# its endpoints exist: identities in task 2.5, resources and policy in task 2.6.
-[[operations]]
-include-path-regex = "/identities"
-enabled = false
-
+# its endpoints exist: resources and policy in task 2.6.
 [[operations]]
 include-path-regex = "/resources"
 enabled = false
