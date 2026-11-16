@@ -67,6 +67,56 @@ def _document_problem_details(schema: dict[str, Any]) -> None:
                 }
 
 
+# Multipart bodies FastAPI describes from loose form fields; the contract has a closed object, of
+# which the endpoint checks "exactly one of" itself (`contract.source_required`).
+_FORM_BODIES: dict[str, tuple[str, dict[str, Any]]] = {
+    "importContract": (
+        "ContractImport",
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "description": "Exactamente uno de `file` o `url`.",
+            "properties": {
+                "file": {"type": "string", "format": "binary"},
+                "url": {"type": "string", "format": "uri", "maxLength": 2048},
+            },
+        },
+    )
+}
+
+
+def _document_form_bodies(schema: dict[str, Any]) -> None:
+    schemas = schema.setdefault("components", {}).setdefault("schemas", {})
+    for operations in schema.get("paths", {}).values():
+        for operation in operations.values():
+            form = _FORM_BODIES.get(operation.get("operationId", ""))
+            body = operation.get("requestBody")
+            if form is None or body is None:
+                continue
+            name, definition = form
+            for media in body.get("content", {}).values():
+                generated = media.get("schema", {}).get("$ref", "").rsplit("/", 1)[-1]
+                schemas.pop(generated, None)
+                media["schema"] = _schema_ref(name)
+            body["required"] = True
+            schemas[name] = definition
+
+
+def _optional_query_parameters(schema: dict[str, Any]) -> None:
+    """An optional query parameter is absent or has a value: it is never JSON `null`. FastAPI
+    writes `X | None = None` as `anyOf [X, null]`; the contract writes X."""
+    for operations in schema.get("paths", {}).values():
+        for operation in operations.values():
+            for parameter in operation.get("parameters", []):
+                options = parameter.get("schema", {}).get("anyOf")
+                if parameter.get("in") != "query" or parameter.get("required") or not options:
+                    continue
+                rest = [option for option in options if option.get("type") != "null"]
+                if len(rest) == 1 and len(rest) < len(options):
+                    others = {k: v for k, v in parameter["schema"].items() if k != "anyOf"}
+                    parameter["schema"] = {**others, **rest[0]}
+
+
 def install_openapi(app: FastAPI, public_paths: frozenset[str]) -> None:
     def openapi() -> dict[str, Any]:
         if app.openapi_schema is None:
@@ -78,6 +128,8 @@ def install_openapi(app: FastAPI, public_paths: frozenset[str]) -> None:
                     for operation in operations.values():
                         operation["security"] = []
             _document_problem_details(schema)
+            _document_form_bodies(schema)
+            _optional_query_parameters(schema)
             app.openapi_schema = schema
         return app.openapi_schema
 

@@ -34,7 +34,9 @@ MAX_PAGE = 10_000
 def get_url_policy(request: Request) -> UrlPolicy:
     settings: Settings = request.app.state.settings
     return UrlPolicy(
-        resolver=request.app.state.resolver, own_addresses=tuple(settings.own_ip_addresses)
+        resolver=request.app.state.resolver,
+        own_addresses=tuple(settings.own_ip_addresses),
+        address_policy=getattr(request.app.state, "address_policy", None),
     )
 
 

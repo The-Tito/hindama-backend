@@ -11,6 +11,7 @@ from uuid import UUID
 
 from sqlalchemy import ScalarSelect, Select, SQLColumnExpression, and_, delete, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 from sqlalchemy.sql.elements import ColumnElement
 
 from hindama.models import ContractVersion, Finding, Identity, Operation, Project, Resource, Run
@@ -160,6 +161,7 @@ async def has_active_run(session: AsyncSession, project_id: UUID) -> bool:
 async def current_contract(session: AsyncSession, project_id: UUID) -> ContractVersion | None:
     statement = (
         select(ContractVersion)
+        .options(defer(ContractVersion.document))  # up to 5 MB the dashboard does not need
         .where(ContractVersion.project_id == project_id)
         .order_by(ContractVersion.number.desc())
         .limit(1)
