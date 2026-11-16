@@ -283,15 +283,6 @@ async def saq_queue() -> AsyncIterator[Queue]:
     await queue.disconnect()
 
 
-async def wait_for_status(owner: AsyncEngine, run_id: UUID, status: str) -> Run:
-    for _ in range(100):
-        run = await stored(owner, run_id)
-        if run.status == status:
-            return run
-        await asyncio.sleep(0.1)
-    raise AssertionError(f"the run never reached {status}")
-
-
 async def test_the_worker_executes_an_enqueued_run(
     project: Project, scanner: Scanner, saq_queue: Queue, owner: AsyncEngine
 ) -> None:
@@ -302,17 +293,20 @@ async def test_the_worker_executes_an_enqueued_run(
         database_url=SecretStr(SCANNER_URL), redis_url=SecretStr(REDIS_URL), concurrency=2
     )
     worker = build_worker(settings, queue=saq_queue, scanner=scanner)
+    job = await saq_queue.job(key)
+    assert job is not None
     running = asyncio.create_task(worker.start())
     try:
-        run = await wait_for_status(owner, run_id, "completed")
+        # Wait for the job, not for the row: the scanner writes the final state just before the
+        # job function returns, and stopping the worker in between aborts the job (seen in CI).
+        await job.refresh(until_complete=10)
     finally:
         await worker.stop()
         await running
     assert key == f"run:{run_id}"
-    assert run.end_reason == "normal"
-    job = await saq_queue.job(key)
-    assert job is not None
     assert job.status == "complete"
+    run = await stored(owner, run_id)
+    assert (run.status, run.end_reason) == ("completed", "normal")
 
 
 async def test_enqueuing_the_same_run_twice_keeps_one_job(
