@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import Field, StringConstraints
+from pydantic import MISSING, Field, StringConstraints, field_validator
 
 from hindama.models.enums import HttpMethod, Policy
 from hindama.schemas.common import SINGLE_LINE, ContractModel, Warning
@@ -100,3 +100,37 @@ class OperationPage(ContractModel):
     total: int = Field(ge=0)
     page: int = Field(ge=1)
     page_size: int = Field(ge=1)
+
+
+# RF-41: a path parameter (`userId`) or a response field in dot notation (`owner.id`).
+OwnerField = Annotated[str, StringConstraints(min_length=1, max_length=200, pattern=SINGLE_LINE)]
+
+
+class OperationUpdate(ContractModel):
+    """Only the fields sent change. `MISSING` keeps "not sent" apart from `null`."""
+
+    policy: Policy | MISSING | None = MISSING
+    owner_field: OwnerField | MISSING | None = MISSING
+    resource_parameters: Annotated[list[ResourceParameter], Field(max_length=20)] | MISSING = (
+        MISSING
+    )
+
+
+class PolicyBulkUpdate(ContractModel):
+    # A list, not a set: an error names its position (`operation_ids.N`).
+    operation_ids: Annotated[
+        list[UUID], Field(min_length=1, max_length=500, json_schema_extra={"uniqueItems": True})
+    ]
+    policy: Policy
+    owner_field: OwnerField | None = None
+
+    @field_validator("operation_ids")
+    @classmethod
+    def _unique(cls, value: list[UUID]) -> list[UUID]:
+        if len(set(value)) != len(value):
+            raise ValueError("operation_ids no admite repetidos")
+        return value
+
+
+class PolicyBulkResult(ContractModel):
+    items: list[Operation]

@@ -138,8 +138,16 @@ async def list_operations(
         .offset((page - 1) * page_size)
     )
     operations = list(await session.scalars(statement))
+    return await describe(session, project_id, operations), total or 0
+
+
+async def describe(
+    session: AsyncSession, project_id: UUID, operations: list[Operation]
+) -> list[tuple[Operation, OperationVersion]]:
+    """Each operation with its latest description (the current version, or the last one that
+    included it if it was retired), in the given order."""
     if not operations:
-        return [], total or 0
+        return []
     latest_versions = (
         select(OperationVersion)
         .join(
@@ -155,4 +163,17 @@ async def list_operations(
         .ext(distinct_on(OperationVersion.operation_id))
     )
     described = {row.operation_id: row for row in await session.scalars(latest_versions)}
-    return [(op, described[op.id]) for op in operations], total or 0
+    return [(op, described[op.id]) for op in operations]
+
+
+async def operations_for_update(
+    session: AsyncSession, project_id: UUID, operation_ids: list[UUID]
+) -> list[Operation]:
+    """The project's operations among `operation_ids`, locked, by path and method."""
+    statement = (
+        select(Operation)
+        .where(Operation.project_id == project_id, Operation.id.in_(operation_ids))
+        .order_by(Operation.path, Operation.method, Operation.id)
+        .with_for_update()
+    )
+    return list(await session.scalars(statement))

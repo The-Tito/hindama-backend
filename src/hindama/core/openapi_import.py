@@ -118,6 +118,80 @@ def is_login_candidate(method: str, path: str) -> bool:
     return bool(segments) and bool(_LOGIN_SEGMENT.match(segments[-1]))
 
 
+# ---------------------------------------------------------------- proposals (RF-35, RF-40)
+
+# A fixed segment that marks an administration area: /admin/users, /internal/jobs...
+_ADMIN_SEGMENT = re.compile(
+    r"^(admin|admins|administration|administracion|internal|manage|management)$", re.IGNORECASE
+)
+# A path parameter that names an object: id, orderId, order_id, orderID.
+_ID_NAME = re.compile(r"^(id|uuid|.+Id|.+ID|.+_id|.+-id)$")
+MAX_NAME = 100  # name and resource_type of a ResourceParameter (contract)
+
+
+def _template_name(segment: str) -> str | None:
+    """`{orderId}` -> `orderId`; `None` for a fixed segment or a mixed one like `{id}.json`."""
+    if _TEMPLATE.fullmatch(segment):
+        return segment[1:-1]
+    return None
+
+
+def path_parameters(path: str) -> list[str]:
+    """The names of the path's templates, in order."""
+    return [segment[1:-1] for segment in _TEMPLATE.findall(path)]
+
+
+def resource_parameters(path: str, parameters: list[dict[str, Json]]) -> list[dict[str, str]]:
+    """RF-35: path parameters that look like object identifiers, each with the resource type of
+    the fixed segment before it (`/orders/{id}` -> `orders`). Only a proposal: the analyst
+    corrects it, and the types must match the ones of the registered resources."""
+    declared = {
+        p.get("name"): p for p in parameters if isinstance(p, dict) and p.get("location") == "path"
+    }
+    result: list[dict[str, str]] = []
+    previous: str | None = None
+    for segment in (s for s in path.split("/") if s):
+        name = _template_name(segment)
+        if name is None:
+            previous = segment
+            continue
+        schema = declared.get(name, {}).get("schema")
+        schema = schema if isinstance(schema, dict) else {}
+        looks_like_id = (
+            bool(_ID_NAME.match(name))
+            or schema.get("format") == "uuid"
+            or declared.get(name, {}).get("type") == "integer"
+        )
+        if looks_like_id and 0 < len(name) <= MAX_NAME and name.isprintable():
+            base = previous if previous is not None else re.sub(r"(_|-)?(id|Id|ID)$", "", name)
+            kind = (base or name).lower()[:MAX_NAME]
+            if kind.isprintable() and all(r["name"] != name for r in result):
+                result.append({"name": name, "resource_type": kind})
+        previous = None  # /orders/{a}/{b}: b has no segment of its own
+    return result
+
+
+def suggested_policy(
+    path: str, security: list[dict[str, str]], resources: list[dict[str, str]]
+) -> str:
+    """RF-40: the template the analyst will probably confirm. Never used unconfirmed (RN-08).
+
+    - no security declared: public;
+    - an administration segment: admin only;
+    - the path ends in a resource identifier: owner only (`/orders/{orderId}`);
+    - anything else (collections, `/me`): any authenticated user.
+    """
+    if not security:
+        return "public"
+    segments = [s for s in path.split("/") if s]
+    if any(_ADMIN_SEGMENT.match(s) for s in segments if _template_name(s) is None):
+        return "admin_only"
+    last = _template_name(segments[-1]) if segments else None
+    if last is not None and any(r["name"] == last for r in resources):
+        return "owner_only"
+    return "authenticated"
+
+
 def pointer(*parts: str | int) -> str:
     return "".join("/" + str(p).replace("~", "~0").replace("/", "~1") for p in parts)
 

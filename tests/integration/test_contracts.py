@@ -165,12 +165,12 @@ async def test_import_a_file(ana: Analyst) -> None:
         "body": None,
         "security": [{"scheme": "bearer", "type": "http_bearer"}],
         "retired_at": None,
-        "suggested_policy": None,  # proposed from task 2.6 on (RF-40)
+        "suggested_policy": "owner_only",  # ends in a resource identifier (RF-40)
         "policy": None,
         "owner_field": None,
         "confirmed_at": None,
         "modified_at": None,
-        "resource_parameters": [],
+        "resource_parameters": [{"name": "orderId", "resource_type": "orders"}],  # RF-35
         "is_login_candidate": False,
     }
     dashboard = (await ana.request("GET", f"/projects/{project['id']}")).json()
