@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     )
     database_pool_size: int = Field(default=5, ge=1, le=50)
 
+    # Redis of the run queue (ADR-012), with its password: redis://:pass@redis:6379/0. Without it
+    # the API answers 503 when launching a run; everything else works.
+    redis_url: SecretStr | None = None
+
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_format: Literal["json", "console"] = "json"
 

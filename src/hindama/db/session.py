@@ -15,9 +15,14 @@ from hindama.config import Settings
 
 def create_engine(settings: Settings) -> AsyncEngine:
     """Creates the engine; it does not connect until the first query."""
+    return engine_for(settings.database_url.get_secret_value(), settings.database_pool_size)
+
+
+def engine_for(url: str, pool_size: int) -> AsyncEngine:
+    """The same engine options for the API and the scanner, each with its own role."""
     return create_async_engine(
-        settings.database_url.get_secret_value(),
-        pool_size=settings.database_pool_size,
+        url,
+        pool_size=pool_size,
         pool_pre_ping=True,
         # Never log statements: parameters may include encrypted credentials or user data.
         echo=False,

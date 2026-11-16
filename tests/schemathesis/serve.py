@@ -1,8 +1,8 @@
 """The real API for Schemathesis (ADR-016, technical test PT-03). Used by `run.sh`.
 
-Real PostgreSQL (`HINDAMA_TEST_DATABASE_URL`, the API role with RLS); fake Cognito and DNS from the
-tests. Once the analyst has accepted the terms, writes their access token to the token file (the
-signal that the API is ready) and serves until stopped.
+Real PostgreSQL (`HINDAMA_TEST_DATABASE_URL`, the API role with RLS); fake Cognito, DNS and run
+queue from the tests. Once the analyst has accepted the terms, writes their access token to the
+token file (the signal that the API is ready) and serves until stopped.
 
 `--cleanup` deletes that analyst, and with them everything Schemathesis created, so the integration
 tests find `hindama_test` clean. It is a separate step because uvicorn re-raises SIGTERM after
@@ -25,6 +25,7 @@ from hindama.models import User
 from tests.conftest import make_settings
 from tests.dns import FakeResolver
 from tests.ownership import ScriptedChecker
+from tests.queue import MemoryRunQueue
 from tests.tokens import FakeUserPool
 
 # Its own analyst: never the default `sub` of the integration tests.
@@ -62,6 +63,7 @@ async def main() -> None:
         profiles=pool.profile_client(),
         resolver=FakeResolver(),
         ownership_checker=ScriptedChecker(),  # never reaches the hosts Schemathesis invents
+        run_queue=MemoryRunQueue(),  # runs are created, never executed: no scanner here
     )
     token = pool.token(sub=SUB)
     server = uvicorn.Server(uvicorn.Config(app, host=HOST, port=PORT, log_level="warning"))

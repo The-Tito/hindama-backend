@@ -28,6 +28,7 @@ from hindama.models import ContractVersion, Project, Run
 from hindama.models.enums import DailyMetricName, Module, Severity, VerificationStatus
 from hindama.repositories import metrics, users
 from hindama.repositories import projects as repository
+from hindama.repositories import runs as runs_repository
 from hindama.repositories.projects import Configuration, ProjectRow, Sort
 
 # Risk of each module (RN-05): medium and high need a confirmation on every run.
@@ -170,6 +171,14 @@ def module_availability(
     ]
 
 
+def is_verified(project: Project) -> bool:
+    """Verified for the host it has now (RN-01): editing the base URL loses the verification."""
+    return (
+        project.verification_status == VerificationStatus.VERIFIED
+        and project.verified_host == project.host
+    )
+
+
 def run_modules(config: Mapping[str, Any]) -> list[Module]:
     """The run's modules in catalog order. `config` keeps them as validated (modelo.md 3.3)."""
     chosen = set(config.get("modules", []))
@@ -200,7 +209,7 @@ async def _dashboard(session: AsyncSession, row: ProjectRow, momentary: list[str
         concluded=row.concluded,
         current_contract=contract,
         last_run=run,
-        last_run_findings=await repository.run_findings_by_severity(session, run.id)
+        last_run_findings=(await runs_repository.findings_by_severity(session, [run.id]))[run.id]
         if run is not None
         else dict.fromkeys(Severity, 0),
         open_findings=await repository.open_findings_by_severity(session, project.id),

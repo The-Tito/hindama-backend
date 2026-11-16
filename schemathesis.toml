@@ -7,9 +7,10 @@
 expected-statuses = ["2xx", "401", "403", "404", "409", "422"]
 
 # Operations of the contract not implemented yet (contract first, ADR-016). Remove each block when
-# its endpoints exist: runs in tasks 3.1 and 3.3, resource discovery with the engine (RF-36).
+# its endpoints exist: cancel, events and results of a run in task 3.3, resource discovery with
+# the engine (RF-36).
 [[operations]]
-include-path-regex = "/runs"
+include-path-regex = "/runs/\\{run_id\\}/"
 enabled = false
 
 [[operations]]

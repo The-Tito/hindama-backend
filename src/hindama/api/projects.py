@@ -9,7 +9,8 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 from hindama.api.accounts import TermsVersion
 from hindama.api.dependencies import Analyst, DbSession
 from hindama.config import Settings
-from hindama.models.enums import Severity
+from hindama.models import Run as RunRow
+from hindama.models.enums import EndReason, RunStatus, Severity
 from hindama.repositories.projects import Sort
 from hindama.schemas.common import SINGLE_LINE, Warning
 from hindama.schemas.projects import (
@@ -44,7 +45,7 @@ def get_url_policy(request: Request) -> UrlPolicy:
 Destinations = Annotated[UrlPolicy, Depends(get_url_policy)]
 
 
-def _severity_count(counts: Mapping[Severity, int]) -> SeverityCount:
+def severity_count(counts: Mapping[Severity, int]) -> SeverityCount:
     return SeverityCount(
         critical=counts[Severity.CRITICAL],
         high=counts[Severity.HIGH],
@@ -52,6 +53,22 @@ def _severity_count(counts: Mapping[Severity, int]) -> SeverityCount:
         low=counts[Severity.LOW],
         info=counts[Severity.INFO],
         total=sum(counts.values()),
+    )
+
+
+def run_summary(run: RunRow, findings: Mapping[Severity, int]) -> RunSummary:
+    """RF-63: the dashboard's `last_run` and each item of `listRuns`."""
+    return RunSummary(
+        id=run.id,
+        number=run.number,
+        status=RunStatus(run.status),
+        end_reason=None if run.end_reason is None else EndReason(run.end_reason),
+        modules=run_modules(run.config),
+        requests_sent=run.requests_sent,
+        findings_by_severity=severity_count(findings),
+        created_at=run.created_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
     )
 
 
@@ -79,21 +96,8 @@ def _project(view: Dashboard) -> Project:
             operation_count=contract.operation_count,
             imported_at=contract.imported_at,
         ),
-        last_run=None
-        if run is None
-        else RunSummary(
-            id=run.id,
-            number=run.number,
-            status=run.status,
-            end_reason=run.end_reason,
-            modules=run_modules(run.config),
-            requests_sent=run.requests_sent,
-            findings_by_severity=_severity_count(view.last_run_findings),
-            created_at=run.created_at,
-            started_at=run.started_at,
-            finished_at=run.finished_at,
-        ),
-        open_findings_by_severity=_severity_count(counts),
+        last_run=None if run is None else run_summary(run, view.last_run_findings),
+        open_findings_by_severity=severity_count(counts),
         modules=[
             ModuleAvailability(
                 module=m.module,
