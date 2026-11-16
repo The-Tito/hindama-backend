@@ -1,6 +1,7 @@
 """Projects (F-02): CU-05 create, CU-06 list, dashboard, edit and delete."""
 
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -82,6 +83,8 @@ WARNING_MESSAGES = {
 class UrlPolicy:
     resolver: Resolver
     own_addresses: tuple[IPAddress, ...] = ()
+    # Only tests set it, to reach their local server on loopback; production uses `is_blocked`.
+    address_policy: Callable[[IPAddress], bool] | None = None
 
 
 @dataclass(frozen=True, slots=True)

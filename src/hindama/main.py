@@ -4,14 +4,19 @@ Run locally with: `uv run uvicorn hindama.main:create_app --factory --no-access-
 (the access log is written by RequestContextMiddleware, without query strings).
 """
 
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI
 
-from hindama.api import accounts, health, projects, verification
-from hindama.api.middleware import AuthenticationMiddleware, RequestContextMiddleware
+from hindama.api import accounts, contracts, health, projects, verification
+from hindama.api.middleware import (
+    AuthenticationMiddleware,
+    RequestContextMiddleware,
+    UploadLimitMiddleware,
+)
 from hindama.api.openapi import install_openapi
 from hindama.api.problems import register_problem_handlers
 from hindama.config import Settings, get_settings
@@ -21,6 +26,11 @@ from hindama.core.destinations import Resolver, SystemResolver
 from hindama.core.logging import configure_logging
 from hindama.core.ownership import NetworkOwnershipChecker, OwnershipChecker, SystemTxtResolver
 from hindama.db.session import create_engine, create_session_factory
+from hindama.models.base import MAX_CONTRACT_BYTES
+
+# The 5 MB of the document plus room for the multipart envelope and the other field (RF-22).
+UPLOAD_BODY_LIMIT = MAX_CONTRACT_BYTES + 64 * 1024
+CONTRACT_UPLOAD_PATH = re.compile(r"/projects/[^/]+/contracts")
 
 
 def create_app(
@@ -79,6 +89,8 @@ def create_app(
     register_problem_handlers(app)
     # The last one added is the outermost: request context wraps authentication.
     public_paths = {"/health"} if settings.is_production else {"/health", "/docs", "/openapi.json"}
+    # Innermost: the upload is buffered only once the caller is authenticated.
+    app.add_middleware(UploadLimitMiddleware, limit=UPLOAD_BODY_LIMIT, path=CONTRACT_UPLOAD_PATH)
     app.add_middleware(
         AuthenticationMiddleware, verifier=verifier, public_paths=frozenset(public_paths)
     )
@@ -88,4 +100,5 @@ def create_app(
     app.include_router(accounts.router)
     app.include_router(projects.router)
     app.include_router(verification.router)
+    app.include_router(contracts.router)
     return app

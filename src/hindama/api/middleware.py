@@ -1,10 +1,11 @@
-"""HTTP middleware: request context and authentication.
+"""HTTP middleware: request context, authentication and the upload limit.
 
 RequestContextMiddleware is the outermost one: request id, access log and last-resort error
 handling. Both are pure ASGI middleware (not BaseHTTPMiddleware) so they also work with streaming
 responses such as the SSE progress stream (ADR-006).
 """
 
+import re
 import time
 
 import structlog
@@ -23,6 +24,7 @@ from hindama.core.request_context import (
     accept_or_generate,
     set_request_id,
 )
+from hindama.services.contracts import ContractTooLargeError
 
 log = structlog.get_logger("hindama.http")
 
@@ -107,3 +109,52 @@ class AuthenticationMiddleware:
 
         scope.setdefault("state", {})["principal"] = principal
         await self.app(scope, receive, send)
+
+
+class UploadLimitMiddleware:
+    """Caps the body of the contract upload before anything parses it (RF-22, RNF-07).
+
+    Starlette writes a multipart file to disk while parsing it, so the 5 MB limit must act earlier:
+    a declared `Content-Length` over the limit is rejected at once, and otherwise the body is read
+    here, counted, and replayed to the app only if it fits. It runs after authentication, so only
+    an analyst's request is ever buffered.
+    """
+
+    def __init__(self, app: ASGIApp, limit: int, path: re.Pattern[str]) -> None:
+        self.app = app
+        self.limit = limit
+        self.path = path
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] != "http"
+            or scope["method"] != "POST"
+            or not self.path.fullmatch(scope["path"])
+        ):
+            await self.app(scope, receive, send)
+            return
+        declared = Headers(scope=scope).get("content-length", "")
+        if declared.isdigit() and int(declared) > self.limit:
+            await app_error_response(ContractTooLargeError())(scope, receive, send)
+            return
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":  # the client went away
+                return
+            body.extend(message.get("body", b""))
+            if len(body) > self.limit:
+                await app_error_response(ContractTooLargeError())(scope, receive, send)
+                return
+            if not message.get("more_body", False):
+                break
+        replayed = False
+
+        async def replay() -> Message:
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": bytes(body), "more_body": False}
+            return await receive()
+
+        await self.app(scope, replay, send)
