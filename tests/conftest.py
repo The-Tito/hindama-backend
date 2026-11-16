@@ -9,9 +9,11 @@ from pydantic import SecretStr
 
 from hindama.config import Settings
 from hindama.core.ownership import OwnershipChecker
+from hindama.core.run_queue import RunQueue
 from hindama.main import create_app
 from tests.dns import FakeResolver
 from tests.ownership import ScriptedChecker
+from tests.queue import MemoryRunQueue
 from tests.tokens import CLIENT_ID, REGION, USER_POOL_ID, FakeUserPool
 
 # In CI every test must run: a missing variable would otherwise skip the RLS tests silently.
@@ -71,11 +73,18 @@ def ownership_checker() -> OwnershipChecker:
 
 
 @pytest.fixture
+def run_queue() -> RunQueue:
+    """In memory by default; the scanner tests use Redis."""
+    return MemoryRunQueue()
+
+
+@pytest.fixture
 def app(
     settings: Settings,
     user_pool: FakeUserPool,
     resolver: FakeResolver,
     ownership_checker: OwnershipChecker,
+    run_queue: RunQueue,
 ) -> FastAPI:
     return create_app(
         settings,
@@ -83,6 +92,7 @@ def app(
         profiles=user_pool.profile_client(),
         resolver=resolver,
         ownership_checker=ownership_checker,
+        run_queue=run_queue,
     )
 
 
