@@ -13,7 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from hindama.core.destinations import ALLOWED_SCHEMES
 from hindama.core.errors import AppError, FieldIssue, NotFoundError, UnprocessableError
-from hindama.core.openapi_import import ContractError, ParsedContract, parse_contract
+from hindama.core.openapi_import import (
+    ContractError,
+    ParsedContract,
+    ParsedOperation,
+    parse_contract,
+    path_parameters,
+    resource_parameters,
+    suggested_policy,
+)
 from hindama.core.safe_http import (
     BlockReason,
     DestinationBlockedError,
@@ -322,6 +330,26 @@ async def import_contract(
     return await _view(session, version, []), True
 
 
+def _propose(operation: Operation, parsed: ParsedOperation) -> None:
+    """RF-35, RF-40. The suggestion follows each version; the analyst's choices are kept.
+
+    An operation the analyst never edited gets the full proposal again. One they edited keeps
+    their resource parameters, minus those no longer in the path; their confirmed policy is never
+    touched (RN-08: only they confirm it).
+    """
+    proposed = resource_parameters(parsed.path, parsed.parameters)
+    if operation.modified_at is None:
+        operation.resource_parameters = proposed
+    else:
+        names = set(path_parameters(parsed.path))
+        kept = [p for p in operation.resource_parameters or [] if p.get("name") in names]
+        if kept != operation.resource_parameters:
+            operation.resource_parameters = kept
+    operation.suggested_policy = suggested_policy(
+        parsed.path, parsed.security, operation.resource_parameters
+    )
+
+
 async def _store_operations(
     session: AsyncSession, project_id: UUID, version: ContractVersion, parsed: ParsedContract
 ) -> None:
@@ -345,6 +373,7 @@ async def _store_operations(
             session.add(operation)
         operation.path = parsed_op.path
         operation.retired_at = None
+        _propose(operation, parsed_op)
         rows.append((operation, index))
     for key, operation in existing.items():
         if key not in present and operation.retired_at is None:
