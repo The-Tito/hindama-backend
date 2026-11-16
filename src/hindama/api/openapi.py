@@ -8,9 +8,11 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
+from pydantic import BaseModel
 
 from hindama.api.problems import PROBLEM_MEDIA_TYPE
 from hindama.schemas.common import Problem
+from hindama.schemas.verification import VerificationProblem
 
 BEARER_SCHEME = {
     "type": "http",
@@ -26,11 +28,23 @@ PROBLEM_REF = {"$ref": "#/components/schemas/Problem"}
 _FASTAPI_VALIDATION_SCHEMAS = ("HTTPValidationError", "ValidationError")
 
 
+# Operations whose 422 can also be a Problem with extra members (oneOf, as in the contract).
+_SPECIFIC_PROBLEMS: dict[str, type[BaseModel]] = {"verifyOwnership": VerificationProblem}
+
+
 def _problem_schemas() -> dict[str, Any]:
-    """`Problem` and `FieldError`, from the same models that build every error response."""
-    schema = Problem.model_json_schema(ref_template="#/components/schemas/{model}")
-    definitions: dict[str, Any] = schema.pop("$defs", {})
-    return {"Problem": schema, **definitions}
+    """`Problem`, its variants and `FieldError`, from the models that describe every error."""
+    result: dict[str, Any] = {}
+    models: list[type[BaseModel]] = [Problem, *_SPECIFIC_PROBLEMS.values()]
+    for model in models:
+        schema = model.model_json_schema(ref_template="#/components/schemas/{model}")
+        result.update(schema.pop("$defs", {}))
+        result[model.__name__] = schema
+    return result
+
+
+def _schema_ref(name: str) -> dict[str, str]:
+    return {"$ref": f"#/components/schemas/{name}"}
 
 
 def _document_problem_details(schema: dict[str, Any]) -> None:
@@ -41,9 +55,15 @@ def _document_problem_details(schema: dict[str, Any]) -> None:
     for operations in schema.get("paths", {}).values():
         for operation in operations.values():
             if "422" in operation.get("responses", {}):
+                specific = _SPECIFIC_PROBLEMS.get(operation.get("operationId", ""))
+                body = (
+                    PROBLEM_REF
+                    if specific is None
+                    else {"oneOf": [_schema_ref(specific.__name__), PROBLEM_REF]}
+                )
                 operation["responses"]["422"] = {
                     "description": "Datos inválidos (`validation.*`) o una regla del negocio.",
-                    "content": {PROBLEM_MEDIA_TYPE: {"schema": PROBLEM_REF}},
+                    "content": {PROBLEM_MEDIA_TYPE: {"schema": body}},
                 }
 
 

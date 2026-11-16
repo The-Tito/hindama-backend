@@ -1,6 +1,7 @@
 """Secrets never reach the logs (RN-11)."""
 
 import json
+from collections.abc import Iterator
 
 import pytest
 import structlog
@@ -45,6 +46,15 @@ def test_masks_values_of_secret_keys_at_any_depth() -> None:
     assert event["cookies"] == MASK
 
 
+@pytest.fixture
+def own_logging() -> Iterator[None]:
+    """Undo the configuration afterwards: it writes to capsys' stream, which closes with the test,
+    and a logger cached later on would keep writing to it ("I/O operation on closed file")."""
+    yield
+    structlog.reset_defaults()
+
+
+@pytest.mark.usefixtures("own_logging")
 def test_rendered_log_line_is_masked(capsys: pytest.CaptureFixture[str]) -> None:
     configure_logging("INFO", "json")
     structlog.get_logger("test").info(

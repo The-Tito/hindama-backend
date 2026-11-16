@@ -5,7 +5,6 @@ owner, which RLS does not filter.
 """
 
 import ipaddress
-from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -13,7 +12,7 @@ from uuid import UUID
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from hindama.models import (
@@ -31,9 +30,9 @@ from hindama.models import (
 from hindama.models.base import new_id
 from hindama.models.enums import DailyMetricName
 from tests.dns import FakeResolver
+from tests.integration.conftest import Analyst
 from tests.tokens import ADMIN_GROUP, FakeUserPool
 
-TERMS = "2026-10-30"
 NOW = datetime(2026, 11, 4, 12, 0, tzinfo=UTC)
 ALL_MISSING = {
     "authentication": ["project_not_verified", "no_contract"],
@@ -55,56 +54,6 @@ ALL_MISSING = {
     "resource_consumption": ["project_not_verified", "no_contract"],
     "sql_injection": ["project_not_verified", "no_contract"],
 }
-
-
-class Analyst:
-    """What Next.js sends on behalf of one Cognito user."""
-
-    def __init__(self, client: httpx.AsyncClient, user_pool: FakeUserPool, sub: str) -> None:
-        self.client = client
-        self.sub = sub
-        self.headers = {"Authorization": f"Bearer {user_pool.token(sub=sub)}"}
-
-    async def request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        return await self.client.request(method, path, headers=self.headers, **kwargs)
-
-    async def accept_terms(self) -> None:
-        response = await self.request("POST", "/me/terms", json={"version": TERMS})
-        assert response.status_code == 200
-
-    async def create(self, **fields: Any) -> dict[str, Any]:
-        body = {"name": "API de pedidos", "base_url": "https://api.ejemplo.com/v1", **fields}
-        response = await self.request("POST", "/projects", json=body)
-        assert response.status_code == 201, response.text
-        project: dict[str, Any] = response.json()
-        return project
-
-
-@pytest.fixture
-async def subs(owner: AsyncEngine) -> AsyncIterator[list[str]]:
-    created: list[str] = []
-    yield created
-    async with owner.begin() as connection:
-        await connection.execute(delete(User).where(User.cognito_sub.in_(created)))
-
-
-@pytest.fixture
-def new_analyst(
-    anonymous_client: httpx.AsyncClient, user_pool: FakeUserPool, subs: list[str]
-) -> Any:
-    def make() -> Analyst:
-        sub = str(new_id())
-        subs.append(sub)
-        return Analyst(anonymous_client, user_pool, sub)
-
-    return make
-
-
-@pytest.fixture
-async def ana(new_analyst: Any) -> Analyst:
-    analyst: Analyst = new_analyst()
-    await analyst.accept_terms()
-    return analyst
 
 
 async def owner_session(owner: AsyncEngine) -> AsyncSession:
