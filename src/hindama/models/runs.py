@@ -58,6 +58,8 @@ class Run(Base):
             name="finished_at_when_final",
         ),
         CheckConstraint("requests_sent >= 0", name="requests_sent"),
+        # Progress of the SSE snapshot (contract 0.4.0): percent = evaluated / planned.
+        CheckConstraint("cells_evaluated BETWEEN 0 AND cells_planned", name="cells"),
         # One active run per project (RN-07, RF-53).
         Index(
             "uq_runs_one_active",
@@ -82,6 +84,9 @@ class Run(Base):
     job_id: Mapped[str | None]
     requests_sent: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     current_module: Mapped[str | None]
+    cells_planned: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    cells_evaluated: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    cancel_requested_at: Mapped[datetime | None]  # CU-14; the scanner stops within 5 s
 
 
 class Result(Base):
