@@ -18,6 +18,7 @@ from hindama.api import (
     identities,
     policy,
     projects,
+    resources,
     verification,
 )
 from hindama.api.middleware import (
@@ -116,5 +117,6 @@ def create_app(
     app.include_router(verification.router)
     app.include_router(contracts.router)
     app.include_router(identities.router)
+    app.include_router(resources.router)
     app.include_router(policy.router)
     return app

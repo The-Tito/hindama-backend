@@ -5,17 +5,3 @@
 # name, a host label has at most 63 characters, RF-11, RF-14, RN-12).
 [checks.positive_data_acceptance]
 expected-statuses = ["2xx", "401", "403", "404", "409", "422"]
-
-# Operations of the contract not implemented yet (contract first, ADR-016). Remove each block when
-# its endpoints exist: resources and policy in task 2.6.
-[[operations]]
-include-path-regex = "/resources"
-enabled = false
-
-[[operations]]
-include-path-regex = "/policy$"
-enabled = false
-
-[[operations]]
-include-path-regex = "/operations/\\{operation_id\\}$"
-enabled = false
