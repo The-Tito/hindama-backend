@@ -142,7 +142,7 @@ async def get_contract(
     return _contract(await service.get_contract(db, project_id, contract_id))
 
 
-def _operation(row: OperationRow, version: OperationVersion) -> Operation:
+def operation_view(row: OperationRow, version: OperationVersion) -> Operation:
     body = version.request_body
     return Operation(
         id=row.id,
@@ -195,7 +195,7 @@ async def list_operations(
         page_size=page_size,
     )
     return OperationPage(
-        items=[_operation(row, version) for row, version in rows],
+        items=[operation_view(row, version) for row, version in rows],
         total=total,
         page=page,
         page_size=page_size,
