@@ -165,6 +165,13 @@ async def test_import_a_file(ana: Analyst) -> None:
         "body": None,
         "security": [{"scheme": "bearer", "type": "http_bearer"}],
         "retired_at": None,
+        "suggested_policy": None,  # proposed from task 2.6 on (RF-40)
+        "policy": None,
+        "owner_field": None,
+        "confirmed_at": None,
+        "modified_at": None,
+        "resource_parameters": [],
+        "is_login_candidate": False,
     }
     dashboard = (await ana.request("GET", f"/projects/{project['id']}")).json()
     assert dashboard["current_contract"]["id"] == body["id"]
@@ -243,6 +250,18 @@ async def test_versions_and_their_differences(ana: Analyst) -> None:
     listed = (await ana.request("GET", f"/projects/{project['id']}/contracts?page_size=2")).json()
     assert [v["number"] for v in listed["items"]] == [3, 2]
     assert listed["total"] == 3
+
+
+async def test_login_candidates_are_marked(ana: Analyst) -> None:
+    project = await ana.create()
+    await import_file(
+        ana, project, document({"/auth/login": {"post": OK}, "/orders": {"post": OK}})
+    )
+    items = (await operations(ana, project))["items"]
+    assert [(op["path"], op["is_login_candidate"]) for op in items] == [
+        ("/auth/login", True),
+        ("/orders", False),
+    ]
 
 
 async def test_operations_filter_and_pages(ana: Analyst) -> None:

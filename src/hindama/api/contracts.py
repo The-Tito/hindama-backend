@@ -7,10 +7,11 @@ from fastapi import APIRouter, File, Form, Query, Response, UploadFile, status
 
 from hindama.api.dependencies import Analyst, DbSession
 from hindama.api.projects import MAX_PAGE, Destinations
+from hindama.core.openapi_import import is_login_candidate
 from hindama.models import Operation as OperationRow
 from hindama.models import OperationVersion
 from hindama.models.base import MAX_CONTRACT_BYTES
-from hindama.models.enums import HttpMethod
+from hindama.models.enums import HttpMethod, Policy
 from hindama.schemas.common import Warning
 from hindama.schemas.contracts import (
     ContractChanges,
@@ -22,6 +23,7 @@ from hindama.schemas.contracts import (
     OperationRef,
     Parameter,
     RequestBody,
+    ResourceParameter,
 )
 from hindama.schemas.projects import ContractVersionSummary
 from hindama.services import contracts as service
@@ -160,6 +162,13 @@ def _operation(row: OperationRow, version: OperationVersion) -> Operation:
         else RequestBody(required=body["required"], content_types=body["content_types"]),
         security=[DeclaredSecurity(**s) for s in version.security],
         retired_at=row.retired_at,
+        suggested_policy=None if row.suggested_policy is None else Policy(row.suggested_policy),
+        policy=None if row.policy is None else Policy(row.policy),
+        owner_field=row.owner_field,
+        confirmed_at=row.confirmed_at,
+        modified_at=row.modified_at,
+        resource_parameters=[ResourceParameter(**p) for p in row.resource_parameters],
+        is_login_candidate=is_login_candidate(row.method, version.path),
     )
 
 

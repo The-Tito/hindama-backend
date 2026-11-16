@@ -102,6 +102,22 @@ def normalize_path(path: str) -> str:
     return _TEMPLATE.sub("{}", path)
 
 
+# The last fixed segment of a login endpoint: /login, /auth/token, /api/v1/sessions...
+_LOGIN_SEGMENT = re.compile(
+    r"^(log-?in|sign-?in|auth|authenticate|token|tokens|session|sessions|access-?token)$",
+    re.IGNORECASE,
+)
+
+
+def is_login_candidate(method: str, path: str) -> bool:
+    """RF-30: a POST whose last fixed segment names a login. Only a proposal: the analyst confirms
+    it when registering a `login` identity."""
+    if method.upper() != "POST":
+        return False
+    segments = [s for s in path.split("/") if s and not _TEMPLATE.fullmatch(s)]
+    return bool(segments) and bool(_LOGIN_SEGMENT.match(segments[-1]))
+
+
 def pointer(*parts: str | int) -> str:
     return "".join("/" + str(p).replace("~", "~0").replace("/", "~1") for p in parts)
 
