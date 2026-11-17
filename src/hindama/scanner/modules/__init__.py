@@ -4,10 +4,11 @@ A cell is `(module, operation, identity)`: one square of the access matrix (RF-6
 gives the progress its total (RF-51); a module that is not implemented yet plans no cells.
 
 What the modules share lives here: the vocabulary of `results`, the control request of an identity
-the policy allows, and how a path is filled.
+the policy allows (catalogo-laboratorio.md, section 4), and how a path is filled.
 """
 
 import asyncio
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -21,8 +22,10 @@ from hindama.models import Identity
 from hindama.models.enums import (
     AuthType,
     HttpMethod,
+    IdentityRole,
     IdentityStatus,
     Module,
+    Policy,
 )
 from hindama.scanner.context import Actor, RunContext, Target
 from hindama.scanner.evidence import Exchange
@@ -114,3 +117,55 @@ def path_parameters(path: str) -> list[str]:
 def fill(path: str, values: Mapping[str, str]) -> str:
     """The path with each parameter replaced by its value, encoded as one segment."""
     return PATH_PARAMETER.sub(lambda match: quote(values[match.group(1)], safe=""), path)
+
+
+def own_path(target: Target, actor: Actor, context: RunContext) -> str | None:
+    """The path filled with the identity's own resources; None if a parameter is not a resource
+    (RF-35) or the identity has none of that type."""
+    types = dict(target.resource_parameters)
+    values: dict[str, str] = {}
+    for name in path_parameters(target.path):
+        resource_type = types.get(name)
+        mine = next(
+            (
+                owned.value
+                for owned in context.resources.get(resource_type or "", [])
+                if owned.owner_id == actor.id
+            ),
+            None,
+        )
+        if resource_type is None or mine is None:
+            return None
+        values[name] = mine
+    return fill(target.path, values)
+
+
+def allowed_path(target: Target, actor: Actor, context: RunContext) -> str | None:
+    """The path this identity may legitimately call under the confirmed policy, or None."""
+    if not actor.authenticated or actor.expired or target.policy in (None, Policy.PUBLIC):
+        return None
+    if target.policy == Policy.ADMIN_ONLY and actor.role != IdentityRole.ADMIN:
+        return None
+    # Ownership policies: its own resources; any other: every path parameter must be one too.
+    return own_path(target, actor, context)
+
+
+def same_shape(attack: Exchange, control: Exchange) -> bool:
+    """Catalog, section 4: equal bodies, or the same JSON type with the same top-level keys."""
+    if attack.body == control.body:
+        return True
+    try:
+        mine, theirs = json.loads(attack.body), json.loads(control.body)
+    except (ValueError, RecursionError):
+        return False
+    if isinstance(mine, dict) and isinstance(theirs, dict):
+        return mine.keys() == theirs.keys()
+    return isinstance(mine, list) and isinstance(theirs, list)
+
+
+def judge_against(attack: Exchange, control: Exchange) -> str:
+    if not 200 <= attack.status_code < 300:
+        return DENIED
+    if attack.body and same_shape(attack, control):
+        return ALLOWED
+    return NO_DATA

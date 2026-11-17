@@ -51,6 +51,10 @@ POLICIES = {
     "DELETE /orders/{order_id}": ("owner_only", "owner"),
     "GET /invoices/{invoice_id}": ("owner_only", "owner"),
     "GET /accounts/{account_id}/statement": ("owner_or_admin", "owner"),
+    "GET /reports": ("authenticated", None),
+    "GET /admin/users": ("admin_only", None),
+    "GET /admin/audit": ("admin_only", None),
+    "DELETE /admin/users/{user_id}": ("admin_only", None),
 }
 RESOURCES = {
     "ana": [("orders", "ord-ana-1"), ("invoices", "inv-ana-1"), ("accounts", "acc-ana")],
