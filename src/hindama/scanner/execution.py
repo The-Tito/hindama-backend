@@ -5,12 +5,15 @@
 Independent of SAQ: the worker calls `execute` with a `touch` that keeps the job alive. Every step
 opens its own short transaction, so the progress and the heartbeat are visible while it runs.
 
-Pending in later tasks: the modules (3.2), cancellation by the analyst and progress events (3.3),
-and the reconciliation of runs left behind by a dead scanner (3.4, CU-23).
+The modules (`scanner/modules`) share one `RequestLimiter` (RF-47) and one `SafeHttpClient` bound
+to the verified host (RF-50). Modules that are not implemented yet plan no cells.
+
+Pending in later tasks: cancellation by the analyst and progress events (3.3), and the
+reconciliation of runs left behind by a dead scanner (3.4, CU-23).
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -18,10 +21,27 @@ import structlog
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from hindama.core.credentials import CredentialCipher
 from hindama.core.ownership import Outcome, OwnershipChecker, published_code
 from hindama.core.run_queue import HEARTBEAT_INTERVAL_SECONDS
+from hindama.core.safe_http import SafeHttpClient
 from hindama.models import Project, Run
-from hindama.models.enums import EndReason, RunStatus, VerificationMethod, VerificationStatus
+from hindama.models.enums import (
+    AuthType,
+    EndReason,
+    Module,
+    RunStatus,
+    VerificationMethod,
+    VerificationStatus,
+)
+from hindama.scanner import context as run_context
+from hindama.scanner.evidence import Masker
+from hindama.scanner.limiter import BudgetExhaustedError, RequestLimiter
+from hindama.scanner.modules import Cell, Scan, ScanModule
+from hindama.scanner.modules.object_access import ObjectAccess
+from hindama.scanner.recorder import Recorder
+from hindama.scanner.requester import Requester
+from hindama.services.projects import run_modules
 
 log = structlog.get_logger(__name__)
 
@@ -43,6 +63,9 @@ SECONDS_PER_MINUTE = 60  # the tests shorten it
 
 Touch = Callable[[], Awaitable[None]]
 
+# In the catalog order of the run (RF-44). The rest arrive with the next PRs of task 3.2.
+MODULES: dict[Module, Callable[[], ScanModule]] = {Module.OBJECT_ACCESS: ObjectAccess}
+
 
 @dataclass(frozen=True, slots=True)
 class Scanner:
@@ -50,6 +73,9 @@ class Scanner:
 
     session_factory: async_sessionmaker[AsyncSession]
     ownership_checker: OwnershipChecker
+    cipher: CredentialCipher
+    # A client bound to the project's host (ADR-008); tests allow their loopback server.
+    http_client: Callable[[str], SafeHttpClient]
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +149,7 @@ async def _run(scanner: Scanner, run: Run) -> Ending:
     try:
         async with asyncio.timeout(limit_seconds):  # RF-47; the job timeout is only a net
             await _modules(scanner, run)
-    except TimeoutError:
+    except (TimeoutError, BudgetExhaustedError):  # duration or total requests (CU-12 E5)
         return Ending(RunStatus.COMPLETED, EndReason.LIMIT_REACHED)
     return Ending(RunStatus.COMPLETED, EndReason.NORMAL)
 
@@ -176,9 +202,55 @@ class OwnershipCheckError(Exception):
 
 
 async def _modules(scanner: Scanner, run: Run) -> None:
-    """The modules arrive in task 3.2. Until then a run plans no cells and ends at once."""
-    async with scanner.session_factory() as session, session.begin():
-        await session.execute(update(Run).where(Run.id == run.id).values(cells_planned=0))
+    async with scanner.session_factory() as session:
+        context = await run_context.load(session, scanner.cipher, run)
+    modules = [MODULES[module]() for module in run_modules(run.config) if module in MODULES]
+    plans = [(module, module.plan(context)) for module in modules]
+    recorder = Recorder(scanner.session_factory, run.id, run.project_id)
+    await recorder.plan(sum(len(cells) for _, cells in plans))
+    limits = run.config["limits"]
+    limiter = RequestLimiter(
+        requests_per_second=limits["requests_per_second"],
+        concurrency=limits["concurrency"],
+        max_requests=limits["max_requests"],
+    )
+    masker = Masker(
+        secrets=[secret for actor in context.actors for secret in actor.secrets()],
+        header_names=[
+            actor.field_name
+            for actor in context.actors
+            if actor.auth_type == AuthType.HEADER and actor.field_name
+        ],
+    )
+    async with scanner.http_client(context.host) as client:
+        requester = Requester(client, limiter, context.base_url, masker)
+        scan = Scan(context, requester, recorder, scanner.session_factory)
+        try:
+            for module, cells in plans:
+                await recorder.start(module.module)
+                await _cells(module, cells, scan, limits["concurrency"])
+        finally:
+            await recorder.sent(limiter.sent)
+
+
+async def _cells(module: ScanModule, cells: Sequence[Cell], scan: Scan, concurrency: int) -> None:
+    gate = asyncio.Semaphore(concurrency)
+
+    async def one(cell: Cell) -> None:
+        async with gate:
+            outcome = await module.evaluate(cell, scan)
+            await scan.recorder.record(outcome, scan.requester.sent)
+
+    try:
+        async with asyncio.TaskGroup() as group:
+            for cell in cells:
+                group.create_task(one(cell))
+    except ExceptionGroup as group:
+        # The first real error fails the run with its own type; a spent budget ends it normally.
+        _, rest = group.split(BudgetExhaustedError)
+        if rest is not None:
+            raise rest.exceptions[0] from None
+        raise BudgetExhaustedError() from None
 
 
 async def _finish(scanner: Scanner, run_id: UUID, ending: Ending) -> None:

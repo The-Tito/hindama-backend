@@ -137,6 +137,9 @@ services:
       HINDAMA_DATABASE_URL: postgresql+asyncpg://hindama_scanner:${HINDAMA_SCANNER_DB_PASSWORD}@db:5432/hindama
       HINDAMA_REDIS_URL: redis://:${HINDAMA_REDIS_PASSWORD}@redis:6379/0
       HINDAMA_OWN_IP_ADDRESSES: ${HINDAMA_OWN_IP_ADDRESSES:-[]}
+      # Same keys as the API: the scanner decrypts credentials only in memory (RN-11).
+      HINDAMA_CREDENTIAL_KEYS: ${HINDAMA_CREDENTIAL_KEYS:-}
+      HINDAMA_CREDENTIAL_KEY_VERSION: ${HINDAMA_CREDENTIAL_KEY_VERSION:-1}
       PYTHONPATH: /app/src
     volumes:
       - ./src:/app/src:ro

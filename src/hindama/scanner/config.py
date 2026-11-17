@@ -1,13 +1,16 @@
 """Settings of the scanner process. Same `HINDAMA_` prefix as the API, but its own database role
-(`hindama_scanner`) and no Cognito: the scanner never authenticates users."""
+(`hindama_scanner`) and no Cognito: the scanner never authenticates users. It holds the credential
+keys to send requests as each identity, decrypting only in memory (RN-11, ADR-007)."""
 
 from typing import Literal
 
 from pydantic import Field, IPvAnyAddress, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
+
+from hindama.config import CredentialKeySettings
 
 
-class ScannerSettings(BaseSettings):
+class ScannerSettings(CredentialKeySettings):
     model_config = SettingsConfigDict(
         env_prefix="HINDAMA_", extra="ignore", hide_input_in_errors=True
     )

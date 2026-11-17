@@ -14,14 +14,14 @@ from uuid import UUID
 
 import pytest
 import structlog
+from fastapi import FastAPI
 from pydantic import SecretStr
 from saq import Queue
 from saq.queue.redis import RedisQueue
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from hindama.core.ownership import CheckResult, Outcome
 from hindama.core.run_queue import SaqRunQueue
-from hindama.db.session import create_session_factory
 from hindama.models import Project as ProjectRow
 from hindama.models import Run
 from hindama.models.enums import VerificationMethod
@@ -29,21 +29,13 @@ from hindama.scanner import execution
 from hindama.scanner.config import ScannerSettings
 from hindama.scanner.execution import Scanner, execute
 from hindama.scanner.worker import build_worker
-from tests.integration.conftest import Analyst
+from tests.conftest import TEST_CREDENTIAL_KEY
+from tests.integration.conftest import SCANNER_URL, Analyst
 from tests.integration.test_runs import Project, finish, new_project, owner_session
+from tests.lab.scanning import lab_scanner
 from tests.ownership import ScriptedChecker
 
-SCANNER_URL = os.environ.get("HINDAMA_TEST_SCANNER_DATABASE_URL")
 REDIS_URL = os.environ.get("HINDAMA_TEST_REDIS_URL")
-
-
-@pytest.fixture(scope="module")
-async def scanner_engine() -> AsyncIterator[AsyncEngine]:
-    if not SCANNER_URL:
-        pytest.skip("HINDAMA_TEST_SCANNER_DATABASE_URL is not set")
-    engine = create_async_engine(SCANNER_URL)
-    yield engine
-    await engine.dispose()
 
 
 @pytest.fixture
@@ -53,10 +45,8 @@ def checker() -> ScriptedChecker:
 
 
 @pytest.fixture
-def scanner(scanner_engine: AsyncEngine, checker: ScriptedChecker) -> Scanner:
-    return Scanner(
-        session_factory=create_session_factory(scanner_engine), ownership_checker=checker
-    )
+def scanner(scanner_engine: AsyncEngine, checker: ScriptedChecker, app: FastAPI) -> Scanner:
+    return lab_scanner(scanner_engine, app.state.credential_cipher, checker)
 
 
 class Touches:
@@ -195,7 +185,12 @@ async def test_the_scanner_waits_for_the_api_to_commit(
                 number=1,
                 config={
                     "modules": ["configuration"],
-                    "limits": {"max_duration_minutes": 30},
+                    "limits": {  # as the API stores them: always complete
+                        "requests_per_second": 5,
+                        "concurrency": 2,
+                        "max_requests": 5000,
+                        "max_duration_minutes": 30,
+                    },
                     "risk_confirmed": False,
                 },
             )
@@ -290,7 +285,10 @@ async def test_the_worker_executes_an_enqueued_run(
     run_id = await launch(project)
     key = await SaqRunQueue(saq_queue).enqueue(run_id)
     settings = ScannerSettings(
-        database_url=SecretStr(SCANNER_URL), redis_url=SecretStr(REDIS_URL), concurrency=2
+        database_url=SecretStr(SCANNER_URL),
+        redis_url=SecretStr(REDIS_URL),
+        concurrency=2,
+        credential_keys={1: SecretStr(TEST_CREDENTIAL_KEY)},
     )
     worker = build_worker(settings, queue=saq_queue, scanner=scanner)
     job = await saq_queue.job(key)

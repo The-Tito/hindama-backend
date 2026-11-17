@@ -23,6 +23,7 @@ TERMS = "2026-10-30"
 
 TEST_DATABASE_URL = os.environ.get("HINDAMA_TEST_DATABASE_URL")
 OWNER_URL = os.environ.get("HINDAMA_TEST_OWNER_DATABASE_URL")
+SCANNER_URL = os.environ.get("HINDAMA_TEST_SCANNER_DATABASE_URL")
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -45,6 +46,16 @@ async def owner() -> AsyncIterator[AsyncEngine]:
     if not OWNER_URL:
         pytest.skip("HINDAMA_TEST_OWNER_DATABASE_URL is not set")
     engine = create_async_engine(OWNER_URL)
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture(scope="session")
+async def scanner_engine() -> AsyncIterator[AsyncEngine]:
+    """`hindama_scanner`, with the same privileges as in production."""
+    if not SCANNER_URL:
+        pytest.skip("HINDAMA_TEST_SCANNER_DATABASE_URL is not set")
+    engine = create_async_engine(SCANNER_URL)
     yield engine
     await engine.dispose()
 
