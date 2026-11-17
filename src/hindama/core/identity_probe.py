@@ -135,6 +135,26 @@ def credential_headers(
     raise IncompleteCredentialError()
 
 
+async def log_in(
+    client: SafeHttpClient, login: LoginRequest, credential: Credential
+) -> tuple[int, str | None]:
+    """RF-30: posts the username and password as JSON; returns the status and the token found.
+    Shared by the identity test and the scanner."""
+    body = json.dumps(
+        {login.username_field: credential.username, login.password_field: credential.password}
+    ).encode()
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    try:
+        response = await client.request(
+            "POST", login.url, headers=headers, content=body, follow_redirects=False
+        )
+    except ResponseTooLargeError as error:
+        return error.status_code, None
+    if not 200 <= response.status_code < 300:
+        return response.status_code, None
+    return response.status_code, find_token(response.content)
+
+
 class IdentityProber:
     """The production prober. `address_policy` and `ssl_context` exist only for tests."""
 
@@ -174,29 +194,12 @@ class IdentityProber:
         if probe.auth_type == AuthType.LOGIN:
             if probe.login is None:
                 raise IncompleteCredentialError()
-            status, token = await self._login(client, probe.login, probe.credential)
+            status, token = await log_in(client, probe.login, probe.credential)
             if token is None:
                 return ProbeResult(status, Failure.LOGIN_FAILED)
         headers = credential_headers(probe.auth_type, probe.credential, probe.field_name, token)
         status = await self._status(client, "GET", probe.url, headers)
         return ProbeResult(status, None if 200 <= status < 300 else Failure.REJECTED)
-
-    async def _login(
-        self, client: SafeHttpClient, login: LoginRequest, credential: Credential
-    ) -> tuple[int, str | None]:
-        body = json.dumps(
-            {login.username_field: credential.username, login.password_field: credential.password}
-        ).encode()
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        try:
-            response = await client.request(
-                "POST", login.url, headers=headers, content=body, follow_redirects=False
-            )
-        except ResponseTooLargeError as error:
-            return error.status_code, None
-        if not 200 <= response.status_code < 300:
-            return response.status_code, None
-        return response.status_code, find_token(response.content)
 
     @staticmethod
     async def _status(

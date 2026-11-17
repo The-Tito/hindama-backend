@@ -365,9 +365,11 @@ def _resolve(document: Any, node: Any) -> Any:
     return None
 
 
-async def _login_request(
+async def login_request(
     session: AsyncSession, project: Project, operation_id: UUID
 ) -> LoginRequest | None:
+    """Where and how an identity logs in (RF-30); `None` if its operation left the contract.
+    Shared with the scanner, which logs in the same way during a run."""
     operation = await repository.live_operation(session, project.id, operation_id)
     described = await repository.latest_description(session, project.id, operation_id)
     if operation is None or described is None:
@@ -425,7 +427,7 @@ async def test_identity(
     login = None
     if kind == AuthType.LOGIN:
         if identity.login_operation_id is not None:
-            login = await _login_request(session, project, identity.login_operation_id)
+            login = await login_request(session, project, identity.login_operation_id)
         if login is None:  # its login operation was retired after the identity was saved
             raise _invalid(
                 "identity.login_operation_required",
