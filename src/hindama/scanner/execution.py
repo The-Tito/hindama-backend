@@ -39,6 +39,7 @@ from hindama.scanner.evidence import Masker
 from hindama.scanner.limiter import BudgetExhaustedError, RequestLimiter
 from hindama.scanner.modules import Cell, Scan, ScanModule
 from hindama.scanner.modules.authentication import Authentication
+from hindama.scanner.modules.configuration import Configuration
 from hindama.scanner.modules.function_access import FunctionAccess
 from hindama.scanner.modules.object_access import ObjectAccess
 from hindama.scanner.recorder import Recorder
@@ -68,6 +69,7 @@ Touch = Callable[[], Awaitable[None]]
 # Run in the catalog order of the run (RF-44). The rest arrive with the next PRs of task 3.2.
 MODULES: dict[Module, Callable[[], ScanModule]] = {
     Module.AUTHENTICATION: Authentication,
+    Module.CONFIGURATION: Configuration,
     Module.OBJECT_ACCESS: ObjectAccess,
     Module.FUNCTION_ACCESS: FunctionAccess,
 }

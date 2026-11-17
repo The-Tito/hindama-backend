@@ -70,6 +70,9 @@ class LabProject:
         self.identities: dict[str, str] = {}  # name -> id
 
     def operation(self, operation_id: UUID | None) -> str:
+        """`METHOD /path`, or `—` for the checks of the whole API (Configuration)."""
+        if operation_id is None:
+            return "—"
         return next(k for k, v in self.operations.items() if v == str(operation_id))
 
     def identity(self, identity_id: UUID) -> str:

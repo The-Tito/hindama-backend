@@ -5,6 +5,9 @@ OpenAPI document is the contract the tests import, as an analyst would.
 
 `ana` logs in and gets a JWT (HS256). The vulnerable mode reads it without checking the signature
 and accepts `alg: none`; the secure mode verifies it and requires HS256.
+
+Configuration (section 2.2): the vulnerable mode sends no security headers, reflects any `Origin`
+with credentials, announces its version and answers a malformed invoice id with its traceback.
 """
 
 import base64
@@ -12,11 +15,12 @@ import binascii
 import hashlib
 import hmac
 import json
+import traceback
 from enum import StrEnum
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
@@ -85,7 +89,7 @@ class LoginBody(BaseModel):
 
 
 def build_lab(mode: Mode) -> FastAPI:
-    app = FastAPI(title="Mini API del laboratorio", version="1.1")
+    app = FastAPI(title="Mini API del laboratorio", version="1.2")
     app.state.seen = []  # (method, path, user): what Hindama sent, for the tests
     tokens = {BETO_TOKEN: "beto", RAIZ_TOKEN: ADMIN}
     bearer = HTTPBearer(auto_error=False)
@@ -97,6 +101,16 @@ def build_lab(mode: Mode) -> FastAPI:
         app.state.seen.append(
             (request.method, request.url.path, request.state.__dict__.get("user"))
         )
+        if mode == Mode.SECURE:
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        else:
+            response.headers["X-Powered-By"] = "Python/3.12 FastAPI/0.115"  # LAB-API8-06
+            origin = request.headers.get("origin")
+            if origin is not None:  # LAB-API8-04: any origin, with credentials
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
 
     def user(request: Request, credentials: Credentials) -> str:
@@ -142,7 +156,14 @@ def build_lab(mode: Mode) -> FastAPI:
         return Response(status_code=204)  # nothing is really deleted: the lab stays the same
 
     @app.get("/invoices/{invoice_id}")
-    async def get_invoice(invoice_id: str, name: User) -> JSONResponse:
+    async def get_invoice(invoice_id: str, name: User) -> Response:
+        if mode == Mode.VULNERABLE and not invoice_id.startswith("inv-"):
+            try:
+                int(invoice_id)  # an old numeric id, the way the legacy code parsed it
+            except ValueError as error:
+                # LAB-API8-05: a debug handler sends the traceback, with the server's paths.
+                text = "".join(traceback.format_exception(error))
+                return PlainTextResponse(text, status_code=500)
         invoice = INVOICES.get(invoice_id)
         if invoice is None or invoice["owner"] != name:
             # The decoy (LAB-API1-06): a 200 that carries an error, in both modes.

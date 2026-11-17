@@ -97,7 +97,9 @@ async def test_a_run_goes_from_queued_to_completed(
     assert run.started_at is not None
     assert run.finished_at is not None
     assert run.started_at <= run.finished_at
-    assert run.cells_planned == 0  # no modules until task 3.2
+    # Configuration plans one cell; nothing listens at the project's host here, so it is an error
+    # cell, and the run still completes (test_configuration.py runs it against the lab).
+    assert run.cells_planned == run.cells_evaluated == 1
     assert run.current_module is None
     assert [call[0] for call in checker.calls] == [VerificationMethod.DNS]  # RF-20
 
