@@ -15,9 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from hindama.core.destinations import SystemResolver
 from hindama.core.ownership import NetworkOwnershipChecker, SystemTxtResolver
 from hindama.core.run_queue import EXECUTE_RUN, QUEUE_NAME
+from hindama.core.safe_http import SafeHttpClient
 from hindama.db.session import create_session_factory, engine_for
 from hindama.scanner.config import ScannerSettings
 from hindama.scanner.execution import Scanner, execute
+from hindama.scanner.requester import SCAN_LIMITS
 
 SWEEP_SECONDS = 10
 CANCELLATION_DEADLINE_SECONDS = 30.0
@@ -48,14 +50,23 @@ def build_worker(
             return
         engine = engine_for(settings.database_url.get_secret_value(), settings.database_pool_size)
         resolver = SystemResolver()
+        own_addresses = settings.own_ip_addresses
+
+        def http_client(host: str) -> SafeHttpClient:
+            return SafeHttpClient(
+                host, resolver=resolver, own_addresses=own_addresses, limits=SCAN_LIMITS
+            )
+
         ctx["engine"] = engine
         ctx["scanner"] = Scanner(
             session_factory=create_session_factory(engine),
             ownership_checker=NetworkOwnershipChecker(
                 resolver=resolver,
                 txt_resolver=SystemTxtResolver(),
-                own_addresses=settings.own_ip_addresses,
+                own_addresses=own_addresses,
             ),
+            cipher=settings.credential_cipher(),
+            http_client=http_client,
         )
 
     async def shutdown(ctx: ScannerContext) -> None:
