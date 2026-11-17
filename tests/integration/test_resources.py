@@ -222,3 +222,18 @@ async def test_object_access_becomes_available(project: Project) -> None:
         json={"policy": "owner_only", "owner_field": "orderId"},
     )
     assert await missing() == []
+
+
+async def test_function_access_needs_an_identity_that_is_not_admin(project: Project) -> None:
+    """RF-57: an administrator and a normal identity. The anonymous one does not count: it is
+    tested by Authentication (API2)."""
+
+    async def missing() -> list[str]:
+        dashboard = (await project.analyst.request("GET", f"/projects/{project.id}")).json()
+        return next(m["missing"] for m in dashboard["modules"] if m["module"] == "function_access")
+
+    await project.identity("Raiz", role="admin")
+    assert "insufficient_identities" in await missing()
+    assert "no_admin_identity" not in await missing()
+    await project.identity("Beto")
+    assert "insufficient_identities" not in await missing()

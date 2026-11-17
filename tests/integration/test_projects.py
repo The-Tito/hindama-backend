@@ -48,6 +48,7 @@ ALL_MISSING = {
     "function_access": [
         "project_not_verified",
         "no_contract",
+        "insufficient_identities",
         "no_admin_identity",
         "policy_unconfirmed",
     ],

@@ -200,6 +200,7 @@ class Configuration:
 
     authenticated_identities: int  # not anonymous, not deleted
     has_admin_identity: bool
+    has_regular_identity: bool  # authenticated and not an administrator (RF-57)
     identities_with_resources: int
     has_ownership_policy: bool  # a confirmed owner_only/owner_or_admin on a current operation
     has_admin_only_policy: bool
@@ -215,6 +216,7 @@ async def configuration(session: AsyncSession, project_id: UUID) -> Configuratio
     statement = select(
         select(func.count()).select_from(Identity).where(live_identity).scalar_subquery(),
         exists().where(live_identity, Identity.role == IdentityRole.ADMIN),
+        exists().where(live_identity, Identity.role != IdentityRole.ADMIN),
         select(func.count(func.distinct(Resource.identity_id)))
         .join(Identity, and_(Identity.id == Resource.identity_id, live_identity))
         .where(Resource.project_id == project_id)
@@ -222,12 +224,13 @@ async def configuration(session: AsyncSession, project_id: UUID) -> Configuratio
         exists().where(current_operation, Operation.policy.in_(OWNERSHIP_POLICIES)),
         exists().where(current_operation, Operation.policy == Policy.ADMIN_ONLY),
     )
-    identities, admin, with_resources, ownership, admin_only = (
+    identities, admin, regular, with_resources, ownership, admin_only = (
         await session.execute(statement)
     ).one()
     return Configuration(
         authenticated_identities=int(identities),
         has_admin_identity=bool(admin),
+        has_regular_identity=bool(regular),
         identities_with_resources=int(with_resources),
         has_ownership_policy=bool(ownership),
         has_admin_only_policy=bool(admin_only),
