@@ -132,8 +132,8 @@ def module_availability(
 
     - Object access (RF-56): two authenticated identities, both with resources, and an operation
       whose confirmed policy requires ownership.
-    - Function access (RF-57): an administrator identity and an operation confirmed as admin only;
-      the non-administrator side can be any other identity, including the anonymous one.
+    - Function access (RF-57): an administrator identity, an authenticated identity that is not one,
+      and an operation confirmed as admin only. The anonymous side belongs to Authentication (API2).
     - Property access (RF-58): at least one authenticated identity.
     """
     common = {
@@ -151,6 +151,7 @@ def module_availability(
         },
         Module.FUNCTION_ACCESS: {
             **common,
+            "insufficient_identities": not config.has_regular_identity,
             "no_admin_identity": not config.has_admin_identity,
             "policy_unconfirmed": not config.has_admin_only_policy,
         },

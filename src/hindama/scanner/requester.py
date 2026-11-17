@@ -10,6 +10,7 @@
 
 import asyncio
 from collections import defaultdict
+from collections.abc import Mapping
 from uuid import UUID
 
 import structlog
@@ -68,11 +69,26 @@ class Requester:
             exchange = await self._send(actor, method, path, token)
         return exchange
 
+    async def send_with(self, headers: Mapping[str, str], method: str, path: str) -> Exchange:
+        """Exactly these credentials, forged or empty (API2): no identity is attached."""
+        return await self._request(method, path, {"Accept": "application/json", **headers})
+
+    async def token(self, actor: Actor) -> str | None:
+        """The bearer token the identity sends, logging in if needed; None if it has none."""
+        if actor.auth_type == AuthType.LOGIN:
+            return await self._token(actor)
+        if actor.auth_type == AuthType.BEARER and actor.credential is not None:
+            return actor.credential.token
+        return None
+
     async def _send(self, actor: Actor, method: str, path: str, token: str | None) -> Exchange:
         headers = {"Accept": "application/json"}
         if actor.credential is not None:
             raw = credential_headers(actor.auth_type, actor.credential, actor.field_name, token)
             headers |= {name.decode(): value.decode() for name, value in raw.items()}
+        return await self._request(method, path, headers)
+
+    async def _request(self, method: str, path: str, headers: dict[str, str]) -> Exchange:
         url = self._base_url + path
         async with self._limiter.slot():
             try:

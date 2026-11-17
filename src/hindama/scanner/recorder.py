@@ -43,7 +43,8 @@ class CellOutcome:
     expected: str
     observed: str
     verdict: Verdict
-    detection: Detection | None = None
+    # One per kind of failure: API2 can find two in one cell, each with its own fingerprint.
+    detections: tuple[Detection, ...] = ()
 
 
 def _monday(today: dt.date) -> dt.date:
@@ -82,8 +83,8 @@ class Recorder:
                     verdict=outcome.verdict,
                 )
             )
-            if outcome.detection is not None:
-                await self._detected(session, outcome, outcome.detection)
+            for detection in outcome.detections:
+                await self._detected(session, outcome, detection)
             await session.execute(
                 update(Run)
                 .where(Run.id == self.run_id)

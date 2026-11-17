@@ -10,8 +10,8 @@ import pytest
 from hindama.models.base import MAX_EVIDENCE_BYTES
 from hindama.scanner.evidence import MAX_BODY_BYTES, Exchange, Masker, mask
 from hindama.scanner.limiter import BudgetExhaustedError, RequestLimiter
-from hindama.scanner.modules import fill, path_parameters
-from hindama.scanner.modules.object_access import ALLOWED, DENIED, NO_DATA, _carries, _judge
+from hindama.scanner.modules import ALLOWED, DENIED, NO_DATA, fill, path_parameters
+from hindama.scanner.modules.object_access import _carries, _judge
 from hindama.scanner.recorder import _monday
 
 # ------------------------------------------------------------------ limiter

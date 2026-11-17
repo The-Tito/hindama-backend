@@ -5,11 +5,12 @@ Without it they are skipped, so the unit suite still runs without Docker.
 """
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -17,6 +18,8 @@ from hindama.config import Settings
 from hindama.models import User
 from hindama.models.base import new_id
 from tests.conftest import make_settings
+from tests.lab.app import Mode, build_lab
+from tests.servers import LocalServer
 from tests.tokens import FakeUserPool
 
 TERMS = "2026-10-30"
@@ -58,6 +61,21 @@ async def scanner_engine() -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(SCANNER_URL)
     yield engine
     await engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def vulnerable_lab() -> Iterator[tuple[LocalServer, FastAPI]]:
+    """The lab's mini API with every failure of the catalog (catalogo-laboratorio.md)."""
+    lab = build_lab(Mode.VULNERABLE)
+    with LocalServer(lab) as server:
+        yield server, lab
+
+
+@pytest.fixture(scope="session")
+def secure_lab() -> Iterator[tuple[LocalServer, FastAPI]]:
+    lab = build_lab(Mode.SECURE)
+    with LocalServer(lab) as server:
+        yield server, lab
 
 
 # ------------------------------------------------------------------ analysts

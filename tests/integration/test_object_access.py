@@ -6,8 +6,6 @@ vulnerable mode yields exactly its findings, the secure mode none, and the decoy
 
 import json
 import os
-from collections.abc import Iterator
-from typing import Any
 from uuid import UUID
 
 import pytest
@@ -22,13 +20,11 @@ from hindama.models import (
     FindingMetric,
     FindingOccurrence,
     Identity,
-    Result,
-    Run,
 )
-from hindama.scanner.execution import Scanner, execute
+from hindama.scanner.execution import Scanner
 from tests.integration.conftest import Analyst
-from tests.lab.app import ANA_PASSWORD, ANA_TOKEN, BETO_TOKEN, RAIZ_TOKEN, Mode, build_lab
-from tests.lab.scanning import LabProject, lab_project, lab_scanner
+from tests.lab.app import ANA_PASSWORD, ANA_TOKEN, BETO_TOKEN, RAIZ_TOKEN
+from tests.lab.scanning import findings, lab_project, lab_scanner, matrix, run_lab, stored_run
 from tests.ownership import ScriptedChecker
 from tests.servers import LocalServer
 
@@ -39,62 +35,9 @@ STATEMENT = "GET /accounts/{account_id}/statement"
 SECRETS = (ANA_PASSWORD, ANA_TOKEN, BETO_TOKEN, RAIZ_TOKEN)
 
 
-async def nothing(*_: Any) -> None:
-    return None
-
-
-@pytest.fixture(scope="module")
-def vulnerable() -> Iterator[tuple[LocalServer, FastAPI]]:
-    lab = build_lab(Mode.VULNERABLE)
-    with LocalServer(lab) as server:
-        yield server, lab
-
-
-@pytest.fixture(scope="module")
-def secure() -> Iterator[tuple[LocalServer, FastAPI]]:
-    lab = build_lab(Mode.SECURE)
-    with LocalServer(lab) as server:
-        yield server, lab
-
-
 @pytest.fixture
 def scanner(scanner_engine: AsyncEngine, app: FastAPI) -> Scanner:
     return lab_scanner(scanner_engine, app.state.credential_cipher, ScriptedChecker())
-
-
-async def run_lab(scanner: Scanner, project: LabProject, lab: FastAPI, **limits: int) -> UUID:
-    lab.state.seen.clear()
-    run_id = await project.launch(["object_access"], **limits)
-    await execute(scanner, run_id, nothing)
-    return run_id
-
-
-async def matrix(owner: AsyncEngine, project: LabProject, run_id: UUID) -> dict[Any, Any]:
-    async with AsyncSession(owner) as db:
-        rows = await db.scalars(select(Result).where(Result.run_id == run_id))
-        return {
-            (project.operation(r.operation_id), project.identity(r.identity_id)): (
-                r.expected,
-                r.observed,
-                r.verdict,
-            )
-            for r in rows
-        }
-
-
-async def findings(owner: AsyncEngine, project: LabProject) -> dict[Any, Finding]:
-    async with AsyncSession(owner) as db:
-        rows = await db.scalars(select(Finding).where(Finding.project_id == UUID(project.id)))
-        return {
-            (project.operation(f.operation_id), project.identity(f.identity_id)): f for f in rows
-        }
-
-
-async def stored_run(owner: AsyncEngine, run_id: UUID) -> Run:
-    async with AsyncSession(owner) as db:
-        run = await db.get(Run, run_id)
-    assert run is not None
-    return run
 
 
 # ------------------------------------------------------------------ the catalog
@@ -102,11 +45,11 @@ async def stored_run(owner: AsyncEngine, run_id: UUID) -> Run:
 
 async def test_the_vulnerable_lab_yields_the_catalog(
     ana: Analyst,
-    vulnerable: tuple[LocalServer, FastAPI],
+    vulnerable_lab: tuple[LocalServer, FastAPI],
     scanner: Scanner,
     owner: AsyncEngine,
 ) -> None:
-    server, lab = vulnerable
+    server, lab = vulnerable_lab
     project = await lab_project(ana, server, lab)
 
     run_id = await run_lab(scanner, project, lab)
@@ -154,11 +97,11 @@ async def test_the_vulnerable_lab_yields_the_catalog(
 
 async def test_the_evidence_reproduces_without_secrets(
     ana: Analyst,
-    vulnerable: tuple[LocalServer, FastAPI],
+    vulnerable_lab: tuple[LocalServer, FastAPI],
     scanner: Scanner,
     owner: AsyncEngine,
 ) -> None:
-    server, lab = vulnerable
+    server, lab = vulnerable_lab
     project = await lab_project(ana, server, lab)
 
     run_id = await run_lab(scanner, project, lab)
@@ -185,11 +128,11 @@ async def test_the_evidence_reproduces_without_secrets(
 
 async def test_the_secure_lab_yields_nothing(
     ana: Analyst,
-    secure: tuple[LocalServer, FastAPI],
+    secure_lab: tuple[LocalServer, FastAPI],
     scanner: Scanner,
     owner: AsyncEngine,
 ) -> None:
-    server, lab = secure
+    server, lab = secure_lab
     project = await lab_project(ana, server, lab)
 
     run_id = await run_lab(scanner, project, lab)
@@ -208,11 +151,11 @@ async def test_the_secure_lab_yields_nothing(
 
 async def test_a_finding_found_again_persists_and_a_resolved_one_regresses(
     ana: Analyst,
-    vulnerable: tuple[LocalServer, FastAPI],
+    vulnerable_lab: tuple[LocalServer, FastAPI],
     scanner: Scanner,
     owner: AsyncEngine,
 ) -> None:
-    server, lab = vulnerable
+    server, lab = vulnerable_lab
     project = await lab_project(ana, server, lab)
     first_run = await run_lab(scanner, project, lab)
     resolved = (await findings(owner, project))[(STATEMENT, "beto")]
@@ -253,11 +196,11 @@ async def test_a_finding_found_again_persists_and_a_resolved_one_regresses(
 
 async def test_an_accepted_risk_stays_accepted(
     ana: Analyst,
-    vulnerable: tuple[LocalServer, FastAPI],
+    vulnerable_lab: tuple[LocalServer, FastAPI],
     scanner: Scanner,
     owner: AsyncEngine,
 ) -> None:
-    server, lab = vulnerable
+    server, lab = vulnerable_lab
     project = await lab_project(ana, server, lab)
     await run_lab(scanner, project, lab)
     accepted = (await findings(owner, project))[(ORDER, "raiz")]
@@ -285,11 +228,11 @@ async def test_an_accepted_risk_stays_accepted(
 
 async def test_a_failed_login_skips_the_identity(
     ana: Analyst,
-    vulnerable: tuple[LocalServer, FastAPI],
+    vulnerable_lab: tuple[LocalServer, FastAPI],
     scanner: Scanner,
     owner: AsyncEngine,
 ) -> None:
-    server, lab = vulnerable
+    server, lab = vulnerable_lab
     project = await lab_project(ana, server, lab, ana_password="otra-clave-que-no-sirve")
 
     run_id = await run_lab(scanner, project, lab)
@@ -305,11 +248,11 @@ async def test_a_failed_login_skips_the_identity(
 
 async def test_an_expired_token_marks_the_identity(
     ana: Analyst,
-    vulnerable: tuple[LocalServer, FastAPI],
+    vulnerable_lab: tuple[LocalServer, FastAPI],
     scanner: Scanner,
     owner: AsyncEngine,
 ) -> None:
-    server, lab = vulnerable
+    server, lab = vulnerable_lab
     project = await lab_project(ana, server, lab, beto_token="tok-beto-que-ya-vencio-0000")
 
     run_id = await run_lab(scanner, project, lab)
@@ -325,11 +268,11 @@ async def test_an_expired_token_marks_the_identity(
 
 async def test_the_request_budget_ends_the_run(
     ana: Analyst,
-    vulnerable: tuple[LocalServer, FastAPI],
+    vulnerable_lab: tuple[LocalServer, FastAPI],
     scanner: Scanner,
     owner: AsyncEngine,
 ) -> None:
-    server, lab = vulnerable
+    server, lab = vulnerable_lab
     project = await lab_project(ana, server, lab)
 
     run_id = await run_lab(scanner, project, lab, max_requests=4, concurrency=1)
@@ -342,12 +285,12 @@ async def test_the_request_budget_ends_the_run(
 
 async def test_a_credential_that_cannot_be_decrypted_leaves_its_identity_out(
     ana: Analyst,
-    vulnerable: tuple[LocalServer, FastAPI],
+    vulnerable_lab: tuple[LocalServer, FastAPI],
     scanner_engine: AsyncEngine,
     owner: AsyncEngine,
 ) -> None:
     """A lost or rotated-out key (ADR-007): the identity is not tested, the run goes on."""
-    server, lab = vulnerable
+    server, lab = vulnerable_lab
     project = await lab_project(ana, server, lab)
     other_key = CredentialCipher({1: os.urandom(32)}, 1)
     scanner = lab_scanner(scanner_engine, other_key, ScriptedChecker())

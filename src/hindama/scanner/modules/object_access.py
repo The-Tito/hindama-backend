@@ -12,7 +12,6 @@ For each operation whose confirmed policy requires ownership, and each authentic
 Only GET and HEAD are sent: other methods wait for resources created by the platform (RN-06).
 """
 
-import asyncio
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -20,8 +19,6 @@ from uuid import UUID
 
 from hindama.models.enums import (
     OWNERSHIP_POLICIES,
-    AuthType,
-    HttpMethod,
     IdentityRole,
     Module,
     Policy,
@@ -30,25 +27,28 @@ from hindama.models.enums import (
 )
 from hindama.scanner.context import Actor, Owned, RunContext, Target
 from hindama.scanner.evidence import Exchange
-from hindama.scanner.modules import Cell, Scan, fill, path_parameters
+from hindama.scanner.modules import (
+    ALLOWED,
+    BASELINE_FAILED,
+    CREDENTIAL_EXPIRED,
+    DENIED,
+    ERROR,
+    LOGIN_FAILED,
+    METHOD_NOT_SAFE,
+    NO_DATA,
+    NO_RESOURCES,
+    SAFE_METHODS,
+    Cell,
+    Scan,
+    fill,
+    path_parameters,
+)
 from hindama.scanner.recorder import CellOutcome, Detection
 from hindama.scanner.requester import LoginFailedError, RequestFailedError
 
 FINDING_TYPE = "object_access.unauthorized_read"
 MAX_VICTIMS = 3
-SAFE_METHODS = frozenset({HttpMethod.GET, HttpMethod.HEAD})
 MIN_TEXT_ID = 4  # outside JSON, a shorter identifier would match by chance
-
-# The vocabulary of `results.expected` and `results.observed` (catalog, section 3.1).
-ALLOWED = "allowed"
-DENIED = "denied"
-NO_DATA = "no_data"
-BASELINE_FAILED = "baseline_failed"
-METHOD_NOT_SAFE = "method_not_safe"
-NO_RESOURCES = "no_resources"
-LOGIN_FAILED = "login_failed"
-CREDENTIAL_EXPIRED = "credential_expired"
-ERROR = "error"
 
 TITLE = "Acceso a un objeto de otra identidad"
 RECOMMENDATION = (
@@ -69,11 +69,6 @@ class Victim:
 class ObjectAccess:
     module = Module.OBJECT_ACCESS
 
-    def __init__(self) -> None:
-        # The owner's answer is the same for every attacker: asked once per run and path.
-        self._baselines: dict[str, Exchange | None] = {}
-        self._baseline_locks: dict[str, asyncio.Lock] = {}
-
     def plan(self, context: RunContext) -> list[Cell]:
         return [
             Cell(target, actor)
@@ -93,8 +88,9 @@ class ObjectAccess:
         def outcome(
             observed: str, verdict: Verdict, detection: Detection | None = None
         ) -> CellOutcome:
+            detections = () if detection is None else (detection,)
             return CellOutcome(
-                self.module, target.id, actor.id, expected, observed, verdict, detection
+                self.module, target.id, actor.id, expected, observed, verdict, detections
             )
 
         if target.method not in SAFE_METHODS:
@@ -107,7 +103,7 @@ class ObjectAccess:
         first: str | None = None
         controls = errors = 0
         for victim in victims:
-            baseline = await self._baseline(scan, target, victim)
+            baseline = await scan.control(victim.owner, target.method, victim.path)
             if baseline is None:
                 continue
             controls += 1
@@ -130,30 +126,6 @@ class ObjectAccess:
         if controls == 0:
             return outcome(BASELINE_FAILED, Verdict.SKIPPED)
         return outcome(ERROR, Verdict.ERROR)
-
-    async def _baseline(self, scan: Scan, target: Target, victim: Victim) -> Exchange | None:
-        """The owner's own request: a 2xx, or None when it proves nothing."""
-        lock = self._baseline_locks.setdefault(victim.path, asyncio.Lock())
-        async with lock:
-            if victim.path in self._baselines:
-                return self._baselines[victim.path]
-            result: Exchange | None = None
-            if not victim.owner.expired:
-                try:
-                    exchange = await scan.requester.send(victim.owner, target.method, victim.path)
-                except (LoginFailedError, RequestFailedError):
-                    exchange = None
-                if exchange is not None and 200 <= exchange.status_code < 300:
-                    result = exchange
-                elif (
-                    exchange is not None
-                    and exchange.status_code == 401
-                    # The login identities already logged in again; any other one expired.
-                    and victim.owner.auth_type != AuthType.LOGIN
-                ):
-                    await scan.expire(victim.owner)
-            self._baselines[victim.path] = result
-            return result
 
 
 def _testable(target: Target) -> bool:

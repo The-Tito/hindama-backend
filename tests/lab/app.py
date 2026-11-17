@@ -2,10 +2,18 @@
 
 Each failure of the catalog exists only in the vulnerable mode; the decoys exist in both. Its own
 OpenAPI document is the contract the tests import, as an analyst would.
+
+`ana` logs in and gets a JWT (HS256). The vulnerable mode reads it without checking the signature
+and accepts `alg: none`; the secure mode verifies it and requires HS256.
 """
 
+import base64
+import binascii
+import hashlib
+import hmac
+import json
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -15,8 +23,9 @@ from pydantic import BaseModel
 ANA_PASSWORD = "clave-de-ana-del-laboratorio"
 BETO_TOKEN = "tok-beto-laboratorio-7c1e"
 RAIZ_TOKEN = "tok-raiz-laboratorio-42aa"
-ANA_TOKEN = "tok-ana-emitido-por-login-91b3"
+JWT_KEY = b"llave-del-laboratorio-que-nadie-mas-conoce"
 ADMIN = "raiz"
+USERS = {"ana": "user", "beto": "user", ADMIN: "admin"}
 
 ORDERS = {
     "ord-ana-1": {"id": "ord-ana-1", "owner": "ana", "total": 120},
@@ -30,6 +39,39 @@ ACCOUNTS = {
     "acc-ana": {"id": "acc-ana", "owner": "ana", "balance": 5000},
     "acc-beto": {"id": "acc-beto", "owner": "beto", "balance": 1200},
 }
+REPORTS = [{"id": "rep-1", "title": "Ventas de noviembre"}]
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _unb64(part: str) -> bytes:
+    return base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))
+
+
+def issue_jwt(subject: str) -> str:
+    head = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    claims = _b64(json.dumps({"sub": subject, "exp": 4_102_444_800}).encode())  # year 2100
+    signature = hmac.new(JWT_KEY, f"{head}.{claims}".encode(), hashlib.sha256).digest()
+    return f"{head}.{claims}.{_b64(signature)}"
+
+
+ANA_TOKEN = issue_jwt("ana")  # what the login answers: deterministic, so the tests can look for it
+
+
+def read_jwt(token: str, *, verify: bool) -> str | None:
+    try:
+        head, claims, signature = token.split(".")
+        header: dict[str, Any] = json.loads(_unb64(head))
+        subject = json.loads(_unb64(claims)).get("sub")
+        if verify:
+            expected = hmac.new(JWT_KEY, f"{head}.{claims}".encode(), hashlib.sha256).digest()
+            if header.get("alg") != "HS256" or not hmac.compare_digest(expected, _unb64(signature)):
+                return None
+    except (ValueError, binascii.Error, AttributeError):
+        return None
+    return subject if subject in USERS else None
 
 
 class Mode(StrEnum):
@@ -43,10 +85,11 @@ class LoginBody(BaseModel):
 
 
 def build_lab(mode: Mode) -> FastAPI:
-    app = FastAPI(title="Mini API del laboratorio", version="1.0")
+    app = FastAPI(title="Mini API del laboratorio", version="1.1")
     app.state.seen = []  # (method, path, user): what Hindama sent, for the tests
     tokens = {BETO_TOKEN: "beto", RAIZ_TOKEN: ADMIN}
     bearer = HTTPBearer(auto_error=False)
+    Credentials = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
 
     @app.middleware("http")
     async def record(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -56,11 +99,13 @@ def build_lab(mode: Mode) -> FastAPI:
         )
         return response
 
-    def user(
-        request: Request,
-        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
-    ) -> str:
-        name = None if credentials is None else tokens.get(credentials.credentials)
+    def user(request: Request, credentials: Credentials) -> str:
+        name = None
+        if credentials is not None:
+            token = credentials.credentials
+            name = tokens.get(token)
+            if name is None and token.count(".") == 2:
+                name = read_jwt(token, verify=mode == Mode.SECURE)
         if name is None:
             raise HTTPException(status_code=401, detail="unauthenticated")
         request.state.user = name
@@ -73,11 +118,14 @@ def build_lab(mode: Mode) -> FastAPI:
             raise HTTPException(status_code=404, detail="not found")
         return record
 
+    def admin(name: str) -> None:
+        if mode == Mode.SECURE and name != ADMIN:
+            raise HTTPException(status_code=403, detail="forbidden")
+
     @app.post("/auth/login")
     async def login(body: LoginBody) -> dict[str, str]:
         if body.username != "ana" or body.password != ANA_PASSWORD:
             raise HTTPException(status_code=401, detail="bad credentials")
-        tokens[ANA_TOKEN] = "ana"
         return {"access_token": ANA_TOKEN}
 
     @app.get("/orders")
@@ -109,5 +157,28 @@ def build_lab(mode: Mode) -> FastAPI:
         if mode == Mode.SECURE and name not in (account["owner"], ADMIN):
             raise HTTPException(status_code=403, detail="forbidden")
         return account
+
+    @app.get("/reports")
+    async def list_reports(request: Request, credentials: Credentials) -> list[dict[str, str]]:
+        if mode == Mode.SECURE:  # LAB-API2-01: the vulnerable mode forgot to check
+            user(request, credentials)
+        return REPORTS
+
+    @app.get("/admin/users")
+    async def list_users(name: User) -> list[dict[str, str]]:
+        admin(name)  # LAB-API5-01: the vulnerable mode lets any authenticated user in
+        return [{"name": n, "role": role} for n, role in USERS.items()]
+
+    @app.get("/admin/audit")
+    async def audit(name: User) -> JSONResponse:
+        if name != ADMIN:
+            # The decoy (LAB-API5-02): a 200 that carries an error, in both modes.
+            return JSONResponse({"error": "forbidden"})
+        return JSONResponse({"entries": [{"action": "login", "user": "ana"}]})
+
+    @app.delete("/admin/users/{user_id}", status_code=204)
+    async def delete_user(user_id: str, name: User) -> Response:
+        admin(name)
+        return Response(status_code=204)
 
     return app
