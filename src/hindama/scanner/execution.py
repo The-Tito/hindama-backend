@@ -56,6 +56,7 @@ from hindama.scanner.modules.object_access import ObjectAccess
 from hindama.scanner.progress import Progress
 from hindama.scanner.recorder import Recorder
 from hindama.scanner.requester import Requester
+from hindama.scanner.resolution import resolve_not_detected
 from hindama.services.projects import run_modules
 
 log = structlog.get_logger(__name__)
@@ -151,7 +152,7 @@ async def _stopped(scanner: Scanner, run: Run) -> None:
 
 
 async def _end(scanner: Scanner, run: Run, ending: Ending) -> None:
-    await _finish(scanner, run.id, ending)
+    await _finish(scanner, run, ending)
     await scanner.events.publish(run.id, RunEvent.END)
     log.info(
         "run_finished",
@@ -329,15 +330,22 @@ async def _cells(module: ScanModule, cells: Sequence[Cell], scan: Scan, concurre
         raise BudgetExhaustedError() from None
 
 
-async def _finish(scanner: Scanner, run_id: UUID, ending: Ending) -> None:
+async def _finish(scanner: Scanner, run: Run, ending: Ending) -> None:
+    """The final status and the findings this run no longer found (RF-68), in one transaction."""
     async with scanner.session_factory() as session, session.begin():
-        await session.execute(
+        ended = await session.scalar(
             update(Run)
-            .where(Run.id == run_id, Run.status == RunStatus.RUNNING)
+            .where(Run.id == run.id, Run.status == RunStatus.RUNNING)
             .values(
                 status=ending.status,
                 end_reason=ending.end_reason,
                 finished_at=func.now(),
                 current_module=None,
             )
+            .returning(Run.id)
         )
+        # Already final (the reconciliation failed it): it resolved there, not twice.
+        if ended is not None:
+            resolved = await resolve_not_detected(session, run.project_id, run.id)
+            if resolved:
+                log.info("findings_resolved", run_id=str(run.id), count=resolved)
