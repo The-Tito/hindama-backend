@@ -1,5 +1,6 @@
 """Schemas of `/runs` (components `RunCreate`, `RunLimitsInput`, `RunLimits`, `Run`, `RunProgress`,
-`CreatedResourceCount`, `RunPage`). `RunSummary` lives with the dashboard, which also uses it."""
+`CreatedResourceCount`, `RunPage`, `IdentityRef`, `Result`, `ResultPage`). `RunSummary` lives
+with the dashboard, which also uses it."""
 
 from datetime import datetime
 from typing import Annotated
@@ -7,8 +8,9 @@ from uuid import UUID
 
 from pydantic import Field, field_validator
 
-from hindama.models.enums import EndReason, Module, RunStatus
+from hindama.models.enums import EndReason, Module, RunStatus, Verdict
 from hindama.schemas.common import ContractModel
+from hindama.schemas.contracts import OperationRef
 from hindama.schemas.projects import ContractVersionSummary, RunSummary, SeverityCount
 
 # RF-47: defaults and caps of each limit.
@@ -87,6 +89,31 @@ class Run(ContractModel):
 
 class RunPage(ContractModel):
     items: list[RunSummary]
+    total: int = Field(ge=0)
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+
+
+class IdentityRef(ContractModel):
+    id: UUID
+    name: str
+    deleted: bool  # deleted after the run; its cells are kept
+
+
+class Result(ContractModel):
+    """A cell of the identity × operation matrix (RF-64)."""
+
+    module: Module
+    operation: OperationRef | None  # None in API-wide checks (CORS)
+    identity: IdentityRef
+    expected: str = Field(max_length=200)
+    observed: str = Field(max_length=200)
+    verdict: Verdict
+    evaluated_at: datetime
+
+
+class ResultPage(ContractModel):
+    items: list[Result]
     total: int = Field(ge=0)
     page: int = Field(ge=1)
     page_size: int = Field(ge=1)

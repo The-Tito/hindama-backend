@@ -1,4 +1,4 @@
-"""`/projects/{project_id}/runs` (CU-12 to CU-14; RF-44 to RF-47, RF-51, RF-52, RF-63)."""
+"""`/projects/{project_id}/runs` (CU-12 to CU-15; RF-44 to RF-47, RF-51, RF-52, RF-63, RF-64)."""
 
 from typing import Annotated
 from uuid import UUID
@@ -14,10 +14,23 @@ from hindama.core.errors import NotFoundError
 from hindama.core.run_events import RunEvent, RunEvents
 from hindama.core.run_queue import RunQueue
 from hindama.db.session import set_rls_context
-from hindama.models.enums import CreatedResourceStatus, EndReason, Module, RunStatus
+from hindama.models import Identity, Operation
+from hindama.models import Result as ResultRow
+from hindama.models.enums import (
+    CreatedResourceStatus,
+    EndReason,
+    HttpMethod,
+    Module,
+    RunStatus,
+    Verdict,
+)
+from hindama.schemas.contracts import OperationRef
 from hindama.schemas.projects import ContractVersionSummary
 from hindama.schemas.runs import (
     CreatedResourceCount,
+    IdentityRef,
+    Result,
+    ResultPage,
     Run,
     RunCreate,
     RunLimits,
@@ -88,9 +101,9 @@ def _run(view: RunView) -> Run:
     )
 
 
-def _unique(value: list[RunStatus]) -> list[RunStatus]:
+def _unique[T](value: list[T]) -> list[T]:
     if len(set(value)) != len(value):
-        raise ValueError("status no admite repetidos")
+        raise ValueError("no admite valores repetidos")
     return value
 
 
@@ -228,3 +241,62 @@ async def stream_run_events(
     events: RunEvents = request.app.state.run_events
     content = stream(events, run_id, load, _run, first_event_id(last_event_id))
     return EventStreamResponse(content, headers=STREAM_HEADERS)
+
+
+def _result(row: ResultRow, operation: Operation | None, identity: Identity) -> Result:
+    return Result(
+        module=Module(row.module),
+        operation=None
+        if operation is None
+        else OperationRef(
+            id=operation.id, method=HttpMethod(operation.method), path=operation.path
+        ),
+        identity=IdentityRef(
+            id=identity.id, name=identity.name, deleted=identity.deleted_at is not None
+        ),
+        expected=row.expected,
+        observed=row.observed,
+        verdict=Verdict(row.verdict),
+        evaluated_at=row.evaluated_at,
+    )
+
+
+@router.get(
+    "/projects/{project_id}/runs/{run_id}/results",
+    operation_id="listRunResults",
+    summary="Matriz identidad × operación",
+)
+async def list_run_results(
+    project_id: UUID,
+    run_id: UUID,
+    _: Analyst,
+    db: DbSession,
+    page: Annotated[int, Query(ge=1, le=MAX_PAGE)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=500)] = 100,
+    modules: Annotated[
+        list[Module],
+        AfterValidator(_unique),
+        Query(alias="module", json_schema_extra={"uniqueItems": True}),
+    ] = [],  # noqa: B006 - FastAPI copies the default; a query list is never shared
+    verdicts: Annotated[
+        list[Verdict],
+        AfterValidator(_unique),
+        Query(alias="verdict", json_schema_extra={"uniqueItems": True}),
+    ] = [],  # noqa: B006
+    identity_id: UUID | None = None,
+    operation_id: UUID | None = None,
+) -> ResultPage:
+    rows, total = await service.list_results(
+        db,
+        project_id,
+        run_id,
+        modules=modules,
+        verdicts=verdicts,
+        identity_id=identity_id,
+        operation_id=operation_id,
+        page=page,
+        page_size=page_size,
+    )
+    return ResultPage(
+        items=[_result(*row) for row in rows], total=total, page=page, page_size=page_size
+    )
