@@ -8,13 +8,12 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import case, delete, func, insert, select, update
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hindama.models import (
     ContractVersion,
     Finding,
-    FindingEvent,
     Identity,
     Operation,
     OperationVersion,
@@ -22,13 +21,11 @@ from hindama.models import (
     Resource,
 )
 from hindama.models.enums import (
-    OPEN_FINDING_STATUSES,
     AuthType,
-    FindingEventReason,
-    FindingStatus,
     HttpMethod,
     ResolutionReason,
 )
+from hindama.repositories import findings
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,48 +198,11 @@ async def soft_delete(session: AsyncSession, identity: Identity, user_id: UUID) 
             Resource.project_id == project_id, Resource.identity_id == identity.id
         )
     )
-    await resolve_findings(session, project_id, identity.id, user_id)
+    await findings.close_open(
+        session,
+        project_id,
+        Finding.identity_id == identity.id,
+        ResolutionReason.IDENTITY_DELETED,
+        user_id,
+    )
     await session.flush()
-
-
-async def resolve_findings(
-    session: AsyncSession, project_id: UUID, identity_id: UUID, user_id: UUID
-) -> int:
-    """Open findings of a deleted identity go to `resolved`, each with its history event."""
-    open_findings = list(
-        await session.execute(
-            select(Finding.id, Finding.status)
-            .where(
-                Finding.project_id == project_id,
-                Finding.identity_id == identity_id,
-                Finding.status.in_(OPEN_FINDING_STATUSES),
-            )
-            .with_for_update()
-        )
-    )
-    if not open_findings:
-        return 0
-    await session.execute(
-        update(Finding)
-        .where(Finding.project_id == project_id, Finding.id.in_([f.id for f in open_findings]))
-        .values(
-            status=FindingStatus.RESOLVED,
-            resolution_reason=ResolutionReason.IDENTITY_DELETED,
-            resolved_at=func.now(),
-        )
-    )
-    await session.execute(
-        insert(FindingEvent),
-        [
-            {
-                "project_id": project_id,
-                "finding_id": finding.id,
-                "from_status": finding.status,
-                "to_status": FindingStatus.RESOLVED,
-                "reason": FindingEventReason.IDENTITY_DELETED,
-                "user_id": user_id,
-            }
-            for finding in open_findings
-        ],
-    )
-    return len(open_findings)

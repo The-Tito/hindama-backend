@@ -7,12 +7,19 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Select, and_, case, exists, func, select
+from sqlalchemy import ColumnElement, Select, and_, case, exists, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from hindama.models import Finding, FindingEvent, FindingOccurrence, Identity, Operation, Run
-from hindama.models.enums import FindingStatus, Module, Severity
+from hindama.models.enums import (
+    OPEN_FINDING_STATUSES,
+    FindingEventReason,
+    FindingStatus,
+    Module,
+    ResolutionReason,
+    Severity,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,3 +205,48 @@ async def history(session: AsyncSession, project_id: UUID, finding_id: UUID) -> 
         .order_by(FindingEvent.id)
     )
     return [EventRow(*values) for values in rows]
+
+
+async def close_open(
+    session: AsyncSession,
+    project_id: UUID,
+    condition: ColumnElement[bool],
+    reason: ResolutionReason,
+    user_id: UUID,
+) -> int:
+    """Administrative closure (RF-69, modelo.md 7.1): the open findings that match `condition` go
+    to `resolved` with `reason`, each with its history event caused by the analyst. Not a fix, so
+    it does not count in `days_to_resolve` (modelo.md 7.3)."""
+    rows = (
+        await session.execute(
+            select(Finding.id, Finding.status)
+            .where(
+                Finding.project_id == project_id,
+                Finding.status.in_(OPEN_FINDING_STATUSES),
+                condition,
+            )
+            .with_for_update()
+        )
+    ).all()
+    if not rows:
+        return 0
+    await session.execute(
+        update(Finding)
+        .where(Finding.project_id == project_id, Finding.id.in_([row.id for row in rows]))
+        .values(status=FindingStatus.RESOLVED, resolution_reason=reason, resolved_at=func.now())
+    )
+    await session.execute(
+        insert(FindingEvent),
+        [
+            {
+                "project_id": project_id,
+                "finding_id": row.id,
+                "from_status": row.status,
+                "to_status": FindingStatus.RESOLVED,
+                "reason": FindingEventReason(reason.value),
+                "user_id": user_id,
+            }
+            for row in rows
+        ],
+    )
+    return len(rows)
