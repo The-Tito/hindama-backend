@@ -34,3 +34,6 @@ CLAUDE.md
 # Schemathesis: token de la API levantada (tests/schemathesis/run.sh) y su caché de ejemplos
 .schemathesis-token
 .schemathesis/
+
+# Laboratorio por túnel: código de verificación del proyecto (postman/README.md)
+tests/lab/.verificacion.txt
