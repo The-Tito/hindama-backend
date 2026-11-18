@@ -15,7 +15,8 @@ Progress and cancellation (task 3.3, ADR-006, RF-51, RF-52):
 - The API cancels by aborting the SAQ job, which cancels this task within about a second, including
   the request in flight. The final state is written in a shielded task, so a second cancellation
   cannot leave it half written. Only a run with `cancel_requested_at` ends `cancelled_by_user`:
-  any other cancellation (the worker stopping) leaves the run to the reconciliation (3.4, CU-23).
+  any other cancellation (the worker stopping) leaves the run to the reconciliation
+  (`scanner/reconciliation.py`, CU-23).
 - The results of the cells already evaluated stay (RF-52). No module creates resources yet, so
   there is nothing to clean up (RN-06); the cleanup arrives with the first module that writes.
 """
@@ -185,14 +186,22 @@ async def _claim(scanner: Scanner, run_id: UUID) -> Run | None:
 
 
 async def _beat(scanner: Scanner, run_id: UUID, touch: Touch) -> None:
-    """Keeps the job alive in SAQ and the run alive for the reconciliation (CU-23)."""
+    """Keeps the job alive in SAQ and the run alive for the reconciliation (CU-23).
+
+    A failed beat (Redis or the database hiccuping) is logged and the next one is tried: if one
+    error ended this task, a live run would stop beating and be failed as dead.
+    """
     while True:
         await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
-        await touch()
-        async with scanner.session_factory() as session, session.begin():
-            await session.execute(
-                update(Run).where(Run.id == run_id).values(heartbeat_at=func.now())
-            )
+        try:
+            await touch()
+            async with scanner.session_factory() as session, session.begin():
+                await session.execute(
+                    update(Run).where(Run.id == run_id).values(heartbeat_at=func.now())
+                )
+        except Exception as error:
+            # Only the type: the message may include the host of Redis or the database.
+            log.warning("run_heartbeat_failed", run_id=str(run_id), error=type(error).__name__)
 
 
 async def _run(scanner: Scanner, run: Run) -> Ending:
