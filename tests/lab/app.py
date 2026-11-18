@@ -91,6 +91,8 @@ class LoginBody(BaseModel):
 def build_lab(mode: Mode) -> FastAPI:
     app = FastAPI(title="Mini API del laboratorio", version="1.2")
     app.state.seen = []  # (method, path, user): what Hindama sent, for the tests
+    # Read on every request: a test can fix the lab between two runs (task 4.2, RF-68).
+    app.state.mode = mode
     tokens = {BETO_TOKEN: "beto", RAIZ_TOKEN: ADMIN}
     bearer = HTTPBearer(auto_error=False)
     Credentials = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
@@ -101,7 +103,7 @@ def build_lab(mode: Mode) -> FastAPI:
         app.state.seen.append(
             (request.method, request.url.path, request.state.__dict__.get("user"))
         )
-        if mode == Mode.SECURE:
+        if app.state.mode == Mode.SECURE:
             response.headers["X-Content-Type-Options"] = "nosniff"
             response.headers["X-Frame-Options"] = "DENY"
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
@@ -119,7 +121,7 @@ def build_lab(mode: Mode) -> FastAPI:
             token = credentials.credentials
             name = tokens.get(token)
             if name is None and token.count(".") == 2:
-                name = read_jwt(token, verify=mode == Mode.SECURE)
+                name = read_jwt(token, verify=app.state.mode == Mode.SECURE)
         if name is None:
             raise HTTPException(status_code=401, detail="unauthenticated")
         request.state.user = name
@@ -128,12 +130,12 @@ def build_lab(mode: Mode) -> FastAPI:
     User = Annotated[str, Depends(user)]
 
     def own(record: dict[str, object] | None, name: str) -> dict[str, object]:
-        if record is None or (mode == Mode.SECURE and record["owner"] != name):
+        if record is None or (app.state.mode == Mode.SECURE and record["owner"] != name):
             raise HTTPException(status_code=404, detail="not found")
         return record
 
     def admin(name: str) -> None:
-        if mode == Mode.SECURE and name != ADMIN:
+        if app.state.mode == Mode.SECURE and name != ADMIN:
             raise HTTPException(status_code=403, detail="forbidden")
 
     @app.post("/auth/login")
@@ -157,7 +159,7 @@ def build_lab(mode: Mode) -> FastAPI:
 
     @app.get("/invoices/{invoice_id}")
     async def get_invoice(invoice_id: str, name: User) -> Response:
-        if mode == Mode.VULNERABLE and not invoice_id.startswith("inv-"):
+        if app.state.mode == Mode.VULNERABLE and not invoice_id.startswith("inv-"):
             try:
                 int(invoice_id)  # an old numeric id, the way the legacy code parsed it
             except ValueError as error:
@@ -175,13 +177,13 @@ def build_lab(mode: Mode) -> FastAPI:
         account = ACCOUNTS.get(account_id)
         if account is None:
             raise HTTPException(status_code=404, detail="not found")
-        if mode == Mode.SECURE and name not in (account["owner"], ADMIN):
+        if app.state.mode == Mode.SECURE and name not in (account["owner"], ADMIN):
             raise HTTPException(status_code=403, detail="forbidden")
         return account
 
     @app.get("/reports")
     async def list_reports(request: Request, credentials: Credentials) -> list[dict[str, str]]:
-        if mode == Mode.SECURE:  # LAB-API2-01: the vulnerable mode forgot to check
+        if app.state.mode == Mode.SECURE:  # LAB-API2-01: the vulnerable mode forgot to check
             user(request, credentials)
         return REPORTS
 
