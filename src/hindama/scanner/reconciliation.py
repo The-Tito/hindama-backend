@@ -32,6 +32,7 @@ from hindama.core.run_events import RunEvent, RunEvents
 from hindama.core.run_queue import QueueUnavailableError, RunQueue
 from hindama.models import Run
 from hindama.models.enums import EndReason, RunStatus
+from hindama.scanner.resolution import resolve_not_detected
 
 log = structlog.get_logger(__name__)
 
@@ -90,6 +91,8 @@ async def _expired(
         ).all()
         for run in runs:
             _fail(run, EndReason.HEARTBEAT_EXPIRED)
+            # ADR-014: what it managed to evaluate counts, as for any failed run (RF-68).
+            await resolve_not_detected(session, run.project_id, run.id)
     for run in runs:
         try:
             # A scanner that is alive but stopped beating must not keep writing.
