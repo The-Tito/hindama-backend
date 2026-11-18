@@ -31,10 +31,11 @@ from hindama.core.safe_http import (
     ResponseTooLargeError,
     SafeHttpClient,
 )
-from hindama.models import ContractVersion, Operation, OperationVersion, Project
+from hindama.models import ContractVersion, Finding, Operation, OperationVersion, Project
 from hindama.models.base import MAX_CONTRACT_BYTES
-from hindama.models.enums import ContractSource
+from hindama.models.enums import ContractSource, ResolutionReason
 from hindama.repositories import contracts as repository
+from hindama.repositories import findings as findings_repository
 from hindama.repositories import projects as projects_repository
 from hindama.repositories.contracts import VersionedOperation
 from hindama.services.projects import UrlPolicy
@@ -278,6 +279,7 @@ async def _parse(raw: bytes, host: str) -> ParsedContract:
 async def import_contract(
     session: AsyncSession,
     project_id: UUID,
+    user_id: UUID,
     *,
     upload: Upload | None,
     url: str | None,
@@ -318,7 +320,18 @@ async def import_contract(
         warnings=[warning.as_json() for warning in parsed.warnings],
     )
     session.add(version)
-    await _store_operations(session, project_id, version, parsed)
+    retired = await _store_operations(session, project_id, version, parsed)
+    # RF-69: a retired operation can no longer be tested; its open findings are closed so the
+    # project can conclude (RF-73). The analyst caused it by importing.
+    closed = 0
+    if retired:
+        closed = await findings_repository.close_open(
+            session,
+            project_id,
+            Finding.operation_id.in_(retired),
+            ResolutionReason.OPERATION_RETIRED,
+            user_id,
+        )
     await session.refresh(version)
     log.info(
         "contract_imported",
@@ -326,6 +339,8 @@ async def import_contract(
         number=version.number,
         source=version.source,
         operations=version.operation_count,
+        retired=len(retired),
+        findings_closed=closed,
     )
     return await _view(session, version, []), True
 
@@ -352,9 +367,10 @@ def _propose(operation: Operation, parsed: ParsedOperation) -> None:
 
 async def _store_operations(
     session: AsyncSession, project_id: UUID, version: ContractVersion, parsed: ParsedContract
-) -> None:
+) -> list[UUID]:
     """Operations are stable across versions by (method, normalized path) (ADR-014): new ones are
-    added, missing ones retired, and ones that come back are no longer retired."""
+    added, missing ones retired, and ones that come back are no longer retired. Returns the ids
+    retired by this version."""
     existing = await repository.operations_by_key(session, project_id)
     now = datetime.now(UTC)
     present: set[tuple[str, str]] = set()
@@ -375,9 +391,11 @@ async def _store_operations(
         operation.retired_at = None
         _propose(operation, parsed_op)
         rows.append((operation, index))
+    retired: list[UUID] = []
     for key, operation in existing.items():
         if key not in present and operation.retired_at is None:
             operation.retired_at = now
+            retired.append(operation.id)
     await session.flush()
     session.add_all(
         OperationVersion(
@@ -396,3 +414,4 @@ async def _store_operations(
         for operation, index in rows
     )
     await session.flush()
+    return retired

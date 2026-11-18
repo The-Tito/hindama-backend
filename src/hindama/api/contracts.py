@@ -109,7 +109,7 @@ async def list_contracts(
 )
 async def import_contract(
     project_id: UUID,
-    _: Analyst,
+    user: Analyst,
     db: DbSession,
     response: Response,
     destinations: Destinations,
@@ -122,7 +122,7 @@ async def import_contract(
         content = await file.read(MAX_CONTRACT_BYTES + 1)
         upload = Upload(content=content, file_name=file.filename)
     view, created = await service.import_contract(
-        db, project_id, upload=upload, url=url, url_policy=destinations
+        db, project_id, user.id, upload=upload, url=url, url_policy=destinations
     )
     if created:
         response.headers["Location"] = f"/projects/{project_id}/contracts/{view.version.id}"
