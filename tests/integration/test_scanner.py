@@ -321,7 +321,9 @@ async def test_the_stream_follows_the_run_from_snapshot_to_end(
     assert names[0] == "snapshot"
     assert set(names[1:-1]) == {"progress"}
     assert names[-1] == "end"
-    assert events[0][1]["status"] == "queued"
+    # The snapshot is the database when the stream read it, right after subscribing: the scanner
+    # may have claimed the run by then (seen in CI). Every `progress` comes after the claim.
+    assert events[0][1]["status"] in ("queued", "running")
     assert events[1][1]["status"] == "running"
     final = (await project.analyst.request("GET", path)).json()
     assert events[-1][1] == final

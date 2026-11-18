@@ -526,7 +526,9 @@ async def test_the_stream_ends_when_a_queued_run_is_cancelled(
     assert cancelled.status_code == 202
     events = sse_events(response.text)
     assert [name for name, _ in events] == ["snapshot", "end"]
-    assert events[0][1]["status"] == "queued"
+    # The snapshot is the database when the stream read it: the cancellation may be committed
+    # by then. Either way the stream ends with the cancelled run.
+    assert events[0][1]["status"] in ("queued", "cancelled")
     assert events[1][1] == cancelled.json()
     assert run_events.listening(UUID(created["id"])) == 0
 

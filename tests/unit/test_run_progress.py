@@ -98,10 +98,20 @@ class Database:
     def __init__(self, current: FakeRun | None) -> None:
         self.current = current
         self.reads = 0
+        self.read = asyncio.Event()  # set on the first reading: the snapshot
 
     async def load(self) -> RunView | None:
         self.reads += 1
+        self.read.set()
         return cast(RunView | None, self.current)
+
+    async def reached(self, reads: int) -> None:
+        """Waits until the stream has read the database `reads` times: no fixed sleeps."""
+        async with asyncio.timeout(2):
+            while True:
+                if self.reads >= reads:
+                    return
+                await asyncio.sleep(0.001)
 
 
 def render(view: RunView) -> Run:
@@ -163,14 +173,13 @@ async def test_snapshot_then_progress_then_end() -> None:
     events = MemoryRunEvents()
     db = Database(run(RunStatus.RUNNING, 0))
     reading = asyncio.create_task(read_all(open_stream(events, db, first_id=5)))
-    await events.subscribed.wait()
-    await asyncio.sleep(0.01)
+    await db.read.wait()  # the snapshot is read: what changes now is progress
 
     db.current = run(RunStatus.RUNNING, 1)
     await events.publish(RUN_ID, RunEvent.PROGRESS)
-    await asyncio.sleep(0.01)
+    await db.reached(2)
     await events.publish(RUN_ID, RunEvent.PROGRESS)  # nothing changed: nothing is sent
-    await asyncio.sleep(0.01)
+    await db.reached(3)
     db.current = run(RunStatus.CANCELLED, 1)
     await events.publish(RUN_ID, RunEvent.END)
     chunks = await asyncio.wait_for(reading, timeout=2)
@@ -219,10 +228,10 @@ async def test_a_lost_end_is_found_at_the_next_reading() -> None:
 async def test_without_redis_it_reads_the_database_every_second() -> None:
     db = Database(run(RunStatus.RUNNING))
     reading = asyncio.create_task(read_all(open_stream(DownRunEvents(), db)))
-    await asyncio.sleep(0.05)
+    await db.reached(1)
 
     db.current = run(RunStatus.RUNNING, 2)
-    await asyncio.sleep(0.05)
+    await db.reached(db.reads + 1)
     db.current = run(RunStatus.COMPLETED, 2)
     chunks = await asyncio.wait_for(reading, timeout=2)
 
