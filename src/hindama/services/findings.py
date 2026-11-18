@@ -1,20 +1,41 @@
-"""Findings: list, detail and occurrences (CU-15; RF-65, RF-66, RF-72, RN-02).
+"""Findings: list, detail and occurrences (CU-15), and the analyst's dismissal (CU-16; RF-65,
+RF-66, RF-70, RF-72, RN-02, RN-09).
 
-The scanner creates and moves findings (modelo.md section 6); the API only reads them here. A
-project, finding or filter of another analyst is not found, never forbidden (RN-02).
+The scanner creates findings and moves them between runs (modelo.md section 6); the analyst only
+accepts a risk, marks a false positive, or reverts it. Both lock the finding first, so a dismissal
+never interleaves with a detection. A project, finding or filter of another analyst is not found,
+never forbidden (RN-02).
 """
 
 from collections.abc import Collection
 from dataclasses import dataclass
 from uuid import UUID
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from hindama.core.errors import NotFoundError
-from hindama.models.enums import FindingStatus, Module, Severity
+from hindama.core.auth import CurrentUser
+from hindama.core.errors import ConflictError, NotFoundError
+from hindama.models import Finding, FindingEvent
+from hindama.models.enums import (
+    OPEN_FINDING_STATUSES,
+    DismissalReason,
+    FindingEventReason,
+    FindingStatus,
+    Module,
+    Severity,
+)
 from hindama.repositories import findings as repository
 from hindama.repositories import projects as projects_repository
 from hindama.repositories.findings import EventRow, FindingRow, OccurrenceRow
+
+log = structlog.get_logger(__name__)
+
+# The event of each dismissal reason (modelo.md section 3.4).
+_DISMISSAL_EVENTS = {
+    DismissalReason.ACCEPTED_RISK: FindingEventReason.ACCEPTED,
+    DismissalReason.FALSE_POSITIVE: FindingEventReason.FALSE_POSITIVE,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,3 +98,79 @@ async def list_occurrences(
     return await repository.occurrences(
         session, project_id, finding_id, page=page, page_size=page_size
     )
+
+
+async def _locked(session: AsyncSession, project_id: UUID, finding_id: UUID) -> Finding:
+    finding = await repository.lock(session, project_id, finding_id)
+    if finding is None:
+        raise NotFoundError()
+    return finding
+
+
+def _analyst_event(
+    finding: Finding,
+    previous: FindingStatus,
+    reason: FindingEventReason,
+    user: CurrentUser,
+    justification: str | None = None,
+) -> FindingEvent:
+    """RF-72: caused by the analyst, so `user_id` and no run."""
+    return FindingEvent(
+        project_id=finding.project_id,
+        finding_id=finding.id,
+        from_status=previous,
+        to_status=finding.status,
+        reason=reason,
+        user_id=user.id,
+        justification=justification,
+    )
+
+
+async def dismiss(
+    session: AsyncSession,
+    project_id: UUID,
+    finding_id: UUID,
+    user: CurrentUser,
+    *,
+    reason: DismissalReason,
+    justification: str,
+) -> FindingView:
+    """RF-70, RN-09. Only an open finding; a detected-again accepted one stays accepted (ADR-014).
+    The audit log entry of RN-09 arrives with the audit catalog (task 4.3)."""
+    finding = await _locked(session, project_id, finding_id)
+    previous = FindingStatus(finding.status)
+    if previous not in OPEN_FINDING_STATUSES:
+        raise ConflictError(
+            "finding.not_open",
+            "El hallazgo no está abierto",
+            "Solo se acepta el riesgo de un hallazgo nuevo, persistente o en regresión.",
+        )
+    finding.status = FindingStatus.ACCEPTED_RISK
+    finding.dismissal_reason = reason
+    finding.justification = justification
+    session.add(_analyst_event(finding, previous, _DISMISSAL_EVENTS[reason], user, justification))
+    await session.flush()
+    log.info("finding_dismissed", finding_id=str(finding_id), reason=reason.value)
+    return await get_finding(session, project_id, finding_id)
+
+
+async def revert_dismissal(
+    session: AsyncSession, project_id: UUID, finding_id: UUID, user: CurrentUser
+) -> None:
+    """RF-70. Back to persistent whatever it was before: it is open again, and the next run that
+    evaluates it and does not find it resolves it."""
+    finding = await _locked(session, project_id, finding_id)
+    if finding.status != FindingStatus.ACCEPTED_RISK:
+        raise ConflictError(
+            "finding.not_dismissed",
+            "El hallazgo no está aceptado",
+            "Solo se revierte un hallazgo con el riesgo aceptado o marcado como falso positivo.",
+        )
+    finding.status = FindingStatus.PERSISTENT
+    finding.dismissal_reason = None
+    finding.justification = None
+    session.add(
+        _analyst_event(finding, FindingStatus.ACCEPTED_RISK, FindingEventReason.REVERTED, user)
+    )
+    await session.flush()
+    log.info("finding_dismissal_reverted", finding_id=str(finding_id))

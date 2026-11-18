@@ -1,15 +1,17 @@
 """Schemas of `/findings` (components `RunRef`, `FindingSummary`, `Finding`, `Dismissal`,
-`FindingOccurrence`, `Evidence`, `FindingEvent`, `FindingPage`, `FindingOccurrencePage`).
+`DismissalCreate`, `FindingOccurrence`, `Evidence`, `FindingEvent`, `FindingPage`,
+`FindingOccurrencePage`).
 
 The evidence comes from the analyst's API: masked by the scanner before it was stored (RN-11), but
 untrusted. The frontend shows it as text.
 """
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import AfterValidator, Field, StringConstraints
+from pydantic_core import PydanticCustomError
 
 from hindama.models.enums import (
     DismissalReason,
@@ -20,7 +22,7 @@ from hindama.models.enums import (
     ResolutionReason,
     Severity,
 )
-from hindama.schemas.common import ContractModel
+from hindama.schemas.common import MULTI_LINE, ContractModel
 from hindama.schemas.contracts import OperationRef
 from hindama.schemas.runs import IdentityRef
 
@@ -82,6 +84,28 @@ class Dismissal(ContractModel):
     reason: DismissalReason
     justification: str
     dismissed_at: datetime
+
+
+def _required_text(value: str) -> str:
+    """Trimmed; nothing left is a missing justification (RN-09), not a short one."""
+    stripped = value.strip()
+    if not stripped:
+        raise PydanticCustomError("missing", "Este campo es obligatorio.")
+    return stripped
+
+
+Justification = Annotated[
+    str,
+    StringConstraints(min_length=1, max_length=2000, pattern=MULTI_LINE),
+    AfterValidator(_required_text),
+]
+
+
+class DismissalCreate(ContractModel):
+    """CU-16, RF-70: accept the risk or mark a false positive, always with a justification."""
+
+    reason: DismissalReason
+    justification: Justification
 
 
 class FindingEvent(ContractModel):

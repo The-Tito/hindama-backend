@@ -1,9 +1,9 @@
-"""`/projects/{project_id}/findings` (CU-15; RF-62, RF-65, RF-66, RF-72)."""
+"""`/projects/{project_id}/findings` (CU-15, CU-16; RF-62, RF-65, RF-66, RF-70, RF-72, RN-09)."""
 
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response, status
 from pydantic import AfterValidator
 
 from hindama.api.dependencies import Analyst, DbSession
@@ -21,6 +21,7 @@ from hindama.models.enums import (
 from hindama.repositories.findings import EventRow, FindingRow, OccurrenceRow
 from hindama.schemas.findings import (
     Dismissal,
+    DismissalCreate,
     Evidence,
     EvidenceRequest,
     EvidenceResponse,
@@ -210,3 +211,35 @@ async def list_finding_occurrences(
     return FindingOccurrencePage(
         items=[_occurrence(row) for row in rows], total=total, page=page, page_size=page_size
     )
+
+
+@router.post(
+    "/projects/{project_id}/findings/{finding_id}/dismissal",
+    operation_id="dismissFinding",
+    summary="Aceptar el riesgo o marcar como falso positivo",
+)
+async def dismiss_finding(
+    project_id: UUID, finding_id: UUID, body: DismissalCreate, user: Analyst, db: DbSession
+) -> Finding:
+    view = await service.dismiss(
+        db,
+        project_id,
+        finding_id,
+        user,
+        reason=body.reason,
+        justification=body.justification,
+    )
+    return _finding(view)
+
+
+@router.delete(
+    "/projects/{project_id}/findings/{finding_id}/dismissal",
+    operation_id="revertDismissal",
+    summary="Revertir la aceptación o el falso positivo",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def revert_dismissal(
+    project_id: UUID, finding_id: UUID, user: Analyst, db: DbSession
+) -> Response:
+    await service.revert_dismissal(db, project_id, finding_id, user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
