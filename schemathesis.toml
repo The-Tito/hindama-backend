@@ -7,7 +7,12 @@
 expected-statuses = ["2xx", "401", "403", "404", "409", "422"]
 
 # Operations of the contract not implemented yet (contract first, ADR-016). Remove each block when
-# its endpoints exist: resource discovery with the engine (RF-36).
+# its endpoints exist: resource discovery with the engine (RF-36), accepting a finding's risk and
+# reverting it (CU-16, task 4.1).
 [[operations]]
 include-path-regex = "/resources/discovery$"
+enabled = false
+
+[[operations]]
+include-path-regex = "/findings/\\{finding_id\\}/dismissal$"
 enabled = false

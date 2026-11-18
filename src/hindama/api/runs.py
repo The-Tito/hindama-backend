@@ -101,7 +101,9 @@ def _run(view: RunView) -> Run:
     )
 
 
-def _unique[T](value: list[T]) -> list[T]:
+def unique[T](value: list[T]) -> list[T]:
+    """A repeated query value is a 422 (`uniqueItems` in the contract)."""
+
     if len(set(value)) != len(value):
         raise ValueError("no admite valores repetidos")
     return value
@@ -120,7 +122,7 @@ async def list_runs(
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     statuses: Annotated[
         list[RunStatus],
-        AfterValidator(_unique),
+        AfterValidator(unique),
         Query(alias="status", json_schema_extra={"uniqueItems": True}),
     ] = [],  # noqa: B006 - FastAPI copies the default; a query list is never shared
 ) -> RunPage:
@@ -243,17 +245,22 @@ async def stream_run_events(
     return EventStreamResponse(content, headers=STREAM_HEADERS)
 
 
+def operation_ref(operation: Operation | None) -> OperationRef | None:
+    if operation is None:
+        return None
+    return OperationRef(id=operation.id, method=HttpMethod(operation.method), path=operation.path)
+
+
+def identity_ref(identity: Identity) -> IdentityRef:
+    """A deleted identity keeps its cells and findings (modelo.md section 7.1)."""
+    return IdentityRef(id=identity.id, name=identity.name, deleted=identity.deleted_at is not None)
+
+
 def _result(row: ResultRow, operation: Operation | None, identity: Identity) -> Result:
     return Result(
         module=Module(row.module),
-        operation=None
-        if operation is None
-        else OperationRef(
-            id=operation.id, method=HttpMethod(operation.method), path=operation.path
-        ),
-        identity=IdentityRef(
-            id=identity.id, name=identity.name, deleted=identity.deleted_at is not None
-        ),
+        operation=operation_ref(operation),
+        identity=identity_ref(identity),
         expected=row.expected,
         observed=row.observed,
         verdict=Verdict(row.verdict),
@@ -275,12 +282,12 @@ async def list_run_results(
     page_size: Annotated[int, Query(ge=1, le=500)] = 100,
     modules: Annotated[
         list[Module],
-        AfterValidator(_unique),
+        AfterValidator(unique),
         Query(alias="module", json_schema_extra={"uniqueItems": True}),
     ] = [],  # noqa: B006 - FastAPI copies the default; a query list is never shared
     verdicts: Annotated[
         list[Verdict],
-        AfterValidator(_unique),
+        AfterValidator(unique),
         Query(alias="verdict", json_schema_extra={"uniqueItems": True}),
     ] = [],  # noqa: B006
     identity_id: UUID | None = None,
