@@ -1,4 +1,4 @@
-"""Runs (CU-12, CU-14; RF-44 to RF-47, RF-52, RN-01, RN-05, RN-07).
+"""Runs (CU-12, CU-14, CU-15; RF-44 to RF-47, RF-52, RF-64, RN-01, RN-05, RN-07).
 
 The API only creates the run and enqueues its id; the scanner executes it (ADR-012). The job is
 enqueued before this transaction commits, so a failure of Redis rolls the run back and the project
@@ -37,9 +37,11 @@ from hindama.models.enums import (
     Module,
     RunStatus,
     Severity,
+    Verdict,
 )
 from hindama.repositories import projects as projects_repository
 from hindama.repositories import runs as repository
+from hindama.repositories.runs import Cell
 from hindama.services.projects import MODULE_RISK, is_verified, module_availability, run_modules
 
 log = structlog.get_logger(__name__)
@@ -238,3 +240,32 @@ async def list_runs(
     rows, total = await repository.page(session, project_id, statuses, page, page_size)
     findings = await repository.findings_by_severity(session, [row.id for row in rows])
     return rows, total, findings
+
+
+async def list_results(
+    session: AsyncSession,
+    project_id: UUID,
+    run_id: UUID,
+    *,
+    modules: Collection[Module],
+    verdicts: Collection[Verdict],
+    identity_id: UUID | None,
+    operation_id: UUID | None,
+    page: int,
+    page_size: int,
+) -> tuple[list[Cell], int]:
+    """RF-64. An active run returns the cells finished so far: a cell is written only once it is
+    complete. A filter by an identity or operation of another project simply matches nothing."""
+    if await repository.get(session, project_id, run_id) is None:
+        raise NotFoundError()
+    return await repository.results(
+        session,
+        project_id,
+        run_id,
+        modules=modules,
+        verdicts=verdicts,
+        identity_id=identity_id,
+        operation_id=operation_id,
+        page=page,
+        page_size=page_size,
+    )
