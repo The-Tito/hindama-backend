@@ -20,10 +20,12 @@ import uvicorn
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from hindama.api import run_stream
 from hindama.main import create_app
 from hindama.models import User
 from tests.conftest import make_settings
 from tests.dns import FakeResolver
+from tests.events import MemoryRunEvents
 from tests.ownership import ScriptedChecker
 from tests.queue import MemoryRunQueue
 from tests.tokens import FakeUserPool
@@ -64,7 +66,10 @@ async def main() -> None:
         resolver=FakeResolver(),
         ownership_checker=ScriptedChecker(),  # never reaches the hosts Schemathesis invents
         run_queue=MemoryRunQueue(),  # runs are created, never executed: no scanner here
+        run_events=MemoryRunEvents(),
     )
+    # Without a scanner a run stays queued: its stream would wait for 15 minutes to close.
+    run_stream.MAX_STREAM_SECONDS = 1.0
     token = pool.token(sub=SUB)
     server = uvicorn.Server(uvicorn.Config(app, host=HOST, port=PORT, log_level="warning"))
     # Same event loop for the setup requests and the server: the database connections of the app

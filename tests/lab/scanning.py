@@ -14,18 +14,23 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from hindama.core.credentials import CredentialCipher
 from hindama.core.ownership import OwnershipChecker
+from hindama.core.run_events import RunEvents
 from hindama.core.safe_http import SafeHttpClient
 from hindama.db.session import create_session_factory
 from hindama.models import Finding, Result, Run
 from hindama.scanner.execution import Scanner, execute
 from hindama.scanner.requester import SCAN_LIMITS
+from tests.events import MemoryRunEvents
 from tests.integration.conftest import Analyst
 from tests.lab.app import ANA_PASSWORD, BETO_TOKEN, RAIZ_TOKEN
 from tests.servers import HOST, LOOPBACK, LocalServer, ScriptedResolver, allow_loopback
 
 
 def lab_scanner(
-    engine: AsyncEngine, cipher: CredentialCipher, checker: OwnershipChecker
+    engine: AsyncEngine,
+    cipher: CredentialCipher,
+    checker: OwnershipChecker,
+    events: RunEvents | None = None,
 ) -> Scanner:
     def http_client(host: str) -> SafeHttpClient:
         return SafeHttpClient(
@@ -40,6 +45,7 @@ def lab_scanner(
         ownership_checker=checker,
         cipher=cipher,
         http_client=http_client,
+        events=events or MemoryRunEvents(),
     )
 
 

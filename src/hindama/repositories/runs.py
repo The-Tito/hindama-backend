@@ -31,6 +31,14 @@ async def get(session: AsyncSession, project_id: UUID, run_id: UUID) -> Run | No
     return run
 
 
+async def lock(session: AsyncSession, project_id: UUID, run_id: UUID) -> Run | None:
+    """Serializes a cancellation with the scanner, which reads the request under the same lock."""
+    run: Run | None = await session.scalar(
+        select(Run).where(Run.project_id == project_id, Run.id == run_id).with_for_update()
+    )
+    return run
+
+
 def _filtered(project_id: UUID, statuses: Collection[RunStatus]) -> Select[Run]:
     statement = select(Run).where(Run.project_id == project_id)
     if statuses:

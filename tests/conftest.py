@@ -12,6 +12,7 @@ from hindama.core.ownership import OwnershipChecker
 from hindama.core.run_queue import RunQueue
 from hindama.main import create_app
 from tests.dns import FakeResolver
+from tests.events import MemoryRunEvents
 from tests.ownership import ScriptedChecker
 from tests.queue import MemoryRunQueue
 from tests.tokens import CLIENT_ID, REGION, USER_POOL_ID, FakeUserPool
@@ -79,12 +80,19 @@ def run_queue() -> RunQueue:
 
 
 @pytest.fixture
+def run_events() -> MemoryRunEvents:
+    """In memory, shared by the API and the scanner of a test (tests/lab/scanning.py)."""
+    return MemoryRunEvents()
+
+
+@pytest.fixture
 def app(
     settings: Settings,
     user_pool: FakeUserPool,
     resolver: FakeResolver,
     ownership_checker: OwnershipChecker,
     run_queue: RunQueue,
+    run_events: MemoryRunEvents,
 ) -> FastAPI:
     return create_app(
         settings,
@@ -93,6 +101,7 @@ def app(
         resolver=resolver,
         ownership_checker=ownership_checker,
         run_queue=run_queue,
+        run_events=run_events,
     )
 
 

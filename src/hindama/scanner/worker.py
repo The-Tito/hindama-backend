@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from hindama.core.destinations import SystemResolver
 from hindama.core.ownership import NetworkOwnershipChecker, SystemTxtResolver
+from hindama.core.run_events import RedisRunEvents
 from hindama.core.run_queue import EXECUTE_RUN, QUEUE_NAME
 from hindama.core.safe_http import SafeHttpClient
 from hindama.db.session import create_session_factory, engine_for
@@ -28,6 +29,7 @@ CANCELLATION_DEADLINE_SECONDS = 30.0
 class ScannerContext(Context, total=False):
     scanner: Scanner
     engine: AsyncEngine
+    events: RedisRunEvents
 
 
 async def execute_run(ctx: ScannerContext, *, run_id: str) -> None:
@@ -57,7 +59,10 @@ def build_worker(
                 host, resolver=resolver, own_addresses=own_addresses, limits=SCAN_LIMITS
             )
 
+        # Progress events go to the same Redis as the queue (ADR-006).
+        events = RedisRunEvents.from_url(settings.redis_url.get_secret_value())
         ctx["engine"] = engine
+        ctx["events"] = events
         ctx["scanner"] = Scanner(
             session_factory=create_session_factory(engine),
             ownership_checker=NetworkOwnershipChecker(
@@ -67,12 +72,16 @@ def build_worker(
             ),
             cipher=settings.credential_cipher(),
             http_client=http_client,
+            events=events,
         )
 
     async def shutdown(ctx: ScannerContext) -> None:
         engine = ctx.get("engine")
         if engine is not None:
             await engine.dispose()
+        events = ctx.get("events")
+        if events is not None:
+            await events.close()
 
     return Worker(
         queue,

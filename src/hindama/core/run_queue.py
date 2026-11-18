@@ -9,7 +9,7 @@ from typing import Protocol
 from uuid import UUID
 
 from redis.exceptions import RedisError
-from saq import Queue
+from saq import Queue, Status
 
 QUEUE_NAME = "runs"
 EXECUTE_RUN = "execute_run"
@@ -23,6 +23,9 @@ JOB_HEARTBEAT_SECONDS = 30
 HEARTBEAT_INTERVAL_SECONDS = 10
 # A run is never retried silently: a dead scanner leaves it to the reconciliation (CU-23).
 JOB_RETRIES = 1
+# The error SAQ keeps on a job the analyst cancelled.
+ABORT_REASON = "cancelled_by_user"
+TERMINAL_JOB_STATUSES = (Status.COMPLETE, Status.FAILED, Status.ABORTED)
 
 
 class QueueUnavailableError(Exception):
@@ -32,6 +35,11 @@ class QueueUnavailableError(Exception):
 class RunQueue(Protocol):
     async def enqueue(self, run_id: UUID) -> str:
         """Enqueues the run and returns the job key."""
+        ...
+
+    async def abort(self, run_id: UUID) -> None:
+        """Stops the run's job: SAQ cancels its task in about a second (RF-52, PT-02). A job that
+        is already gone (finished, or lost with a dead scanner) is left alone."""
         ...
 
     async def close(self) -> None: ...
@@ -67,6 +75,14 @@ class SaqRunQueue:
             return key
         return job.key
 
+    async def abort(self, run_id: UUID) -> None:
+        try:
+            job = await self.queue.job(job_key(run_id))
+            if job is not None and job.status not in TERMINAL_JOB_STATUSES:
+                await self.queue.abort(job, error=ABORT_REASON)
+        except (RedisError, OSError, TimeoutError) as error:
+            raise QueueUnavailableError(type(error).__name__) from error
+
     async def close(self) -> None:
         # Shutting down with Redis gone must not fail: there is nothing left to release.
         with contextlib.suppress(RedisError, OSError):
@@ -77,6 +93,9 @@ class UnconfiguredRunQueue:
     """Without `HINDAMA_REDIS_URL` the API still serves everything but launching runs."""
 
     async def enqueue(self, run_id: UUID) -> str:
+        raise QueueUnavailableError("redis_url is not set")
+
+    async def abort(self, run_id: UUID) -> None:
         raise QueueUnavailableError("redis_url is not set")
 
     async def close(self) -> None:

@@ -2,6 +2,7 @@
 
 One short transaction per finished cell: its `results` row, its finding if it failed, and the
 progress counters. A cell cut short (cancellation, limit) writes nothing, so it resolves nothing.
+After each write, `Progress` tells the API's streams to read the run again (ADR-006).
 
 Findings are matched by fingerprint `(module, finding_type, operation, identity)` as soon as they
 are detected, not when the run ends: progress shows them live (RF-51), and a scanner that dies
@@ -19,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from hindama.models import Finding, FindingEvent, FindingMetric, FindingOccurrence, Result, Run
 from hindama.models.enums import FindingEventReason, FindingStatus, Module, Severity, Verdict
+from hindama.scanner.progress import Progress
 
 OPEN = (FindingStatus.NEW, FindingStatus.PERSISTENT, FindingStatus.REGRESSION)
 
@@ -54,17 +56,24 @@ def _monday(today: dt.date) -> dt.date:
 
 class Recorder:
     def __init__(
-        self, session_factory: async_sessionmaker[AsyncSession], run_id: UUID, project_id: UUID
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        run_id: UUID,
+        project_id: UUID,
+        progress: Progress,
     ) -> None:
         self._sessions = session_factory
         self.run_id = run_id
         self.project_id = project_id
+        self.progress = progress
 
     async def plan(self, cells: int) -> None:
         await self._update_run(cells_planned=cells)
+        await self.progress.changed()
 
     async def start(self, module: Module) -> None:
         await self._update_run(current_module=module)
+        await self.progress.now()
 
     async def sent(self, requests: int) -> None:
         await self._update_run(requests_sent=func.greatest(Run.requests_sent, requests))
@@ -93,6 +102,7 @@ class Recorder:
                     requests_sent=func.greatest(Run.requests_sent, requests),
                 )
             )
+        await self.progress.changed()
 
     async def _detected(
         self, session: AsyncSession, outcome: CellOutcome, detection: Detection

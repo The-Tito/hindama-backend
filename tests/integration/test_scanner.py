@@ -6,9 +6,11 @@ the tests empty it).
 """
 
 import asyncio
+import contextlib
+import dataclasses
 import os
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 from uuid import UUID
 
@@ -18,22 +20,26 @@ from fastapi import FastAPI
 from pydantic import SecretStr
 from saq import Queue
 from saq.queue.redis import RedisQueue
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from hindama.core.ownership import CheckResult, Outcome
+from hindama.core.run_events import RedisRunEvents, RunEvent, Subscription
 from hindama.core.run_queue import SaqRunQueue
 from hindama.models import Project as ProjectRow
-from hindama.models import Run
+from hindama.models import Result, Run
 from hindama.models.enums import VerificationMethod
 from hindama.scanner import execution
 from hindama.scanner.config import ScannerSettings
 from hindama.scanner.execution import Scanner, execute
 from hindama.scanner.worker import build_worker
 from tests.conftest import TEST_CREDENTIAL_KEY
+from tests.events import MemoryRunEvents
 from tests.integration.conftest import SCANNER_URL, Analyst
-from tests.integration.test_runs import Project, finish, new_project, owner_session
-from tests.lab.scanning import lab_scanner
+from tests.integration.test_runs import Project, finish, new_project, owner_session, sse_events
+from tests.lab.scanning import lab_project, lab_scanner
 from tests.ownership import ScriptedChecker
+from tests.servers import LocalServer
 
 REDIS_URL = os.environ.get("HINDAMA_TEST_REDIS_URL")
 
@@ -46,7 +52,7 @@ def checker() -> ScriptedChecker:
 
 @pytest.fixture
 def scanner(scanner_engine: AsyncEngine, checker: ScriptedChecker, app: FastAPI) -> Scanner:
-    return lab_scanner(scanner_engine, app.state.credential_cipher, checker)
+    return lab_scanner(scanner_engine, app.state.credential_cipher, checker, app.state.run_events)
 
 
 class Touches:
@@ -73,6 +79,16 @@ async def stored(owner: AsyncEngine, run_id: UUID) -> Run:
         run = await db.get(Run, run_id)
     assert run is not None
     return run
+
+
+async def until(
+    owner: AsyncEngine, run_id: UUID, condition: Callable[[Run], bool], seconds: float
+) -> None:
+    async with asyncio.timeout(seconds):
+        while True:
+            if condition(await stored(owner, run_id)):
+                return
+            await asyncio.sleep(0.05)
 
 
 async def verification_status(owner: AsyncEngine, project: Project) -> str:
@@ -266,6 +282,74 @@ async def test_an_error_fails_only_that_run_and_logs_only_its_type(
     assert "secreto" not in repr(logs)
 
 
+# ------------------------------------------------------------------ progress (CU-13, RF-51)
+
+
+class PacedRunEvents:
+    """Gives the stream time to read each `progress`. Without it, a run faster than the stream
+    goes from `snapshot` to `end`, which is right but leaves nothing to check in between."""
+
+    def __init__(self, events: MemoryRunEvents) -> None:
+        self.events = events
+
+    async def publish(self, run_id: UUID, event: RunEvent) -> None:
+        await self.events.publish(run_id, event)
+        if event == RunEvent.PROGRESS:
+            await asyncio.sleep(0.3)
+
+    def subscribe(self, run_id: UUID) -> contextlib.AbstractAsyncContextManager[Subscription]:
+        return self.events.subscribe(run_id)
+
+    async def close(self) -> None:
+        await self.events.close()
+
+
+async def test_the_stream_follows_the_run_from_snapshot_to_end(
+    project: Project, scanner: Scanner, run_events: MemoryRunEvents
+) -> None:
+    run_id = await launch(project)
+    path = f"{project.runs}/{run_id}"
+    streaming = asyncio.create_task(project.analyst.request("GET", f"{path}/events"))
+    await asyncio.wait_for(run_events.subscribed.wait(), timeout=5)
+    paced = dataclasses.replace(scanner, events=PacedRunEvents(run_events))
+
+    await execute(paced, run_id, Touches())
+    response = await asyncio.wait_for(streaming, timeout=5)
+
+    events = sse_events(response.text)
+    names = [name for name, _ in events]
+    assert names[0] == "snapshot"
+    assert set(names[1:-1]) == {"progress"}
+    assert names[-1] == "end"
+    assert events[0][1]["status"] == "queued"
+    assert events[1][1]["status"] == "running"
+    final = (await project.analyst.request("GET", path)).json()
+    assert events[-1][1] == final
+    assert final["progress"]["percent"] == 100
+    # The scanner published while it ran, and `end` last (ADR-006).
+    assert run_events.of(run_id)[-1] == RunEvent.END
+    assert RunEvent.PROGRESS in run_events.of(run_id)
+
+
+async def test_a_cancelled_task_without_a_request_is_left_to_the_reconciliation(
+    project: Project, scanner: Scanner, owner: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def endless(*_: Any) -> None:
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(execution, "_modules", endless)
+    run_id = await launch(project)
+    task = asyncio.create_task(execute(scanner, run_id, Touches()))
+    await asyncio.sleep(0.2)
+
+    task.cancel()  # the worker stopping, not the analyst (CU-23, task 3.4)
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    run = await stored(owner, run_id)
+    assert (run.status, run.end_reason) == ("running", None)
+
+
 # ------------------------------------------------------------------ through SAQ and Redis
 
 
@@ -320,3 +404,82 @@ async def test_enqueuing_the_same_run_twice_keeps_one_job(
 
     assert first == second == f"run:{run_id}"
     assert await saq_queue.count("queued") == 1
+
+
+async def test_redis_carries_the_events_of_one_run() -> None:
+    if not REDIS_URL:
+        pytest.skip("HINDAMA_TEST_REDIS_URL is not set")
+    events = RedisRunEvents.from_url(REDIS_URL)
+    run_id, other = uuid.uuid4(), uuid.uuid4()
+    try:
+        async with events.subscribe(run_id) as subscription:
+            await events.publish(other, RunEvent.END)
+            await events.publish(run_id, RunEvent.PROGRESS)
+            await events.publish(run_id, RunEvent.END)
+
+            received = [await subscription.receive(1.0) for _ in range(2)]
+            assert received == [RunEvent.PROGRESS, RunEvent.END]
+            assert await subscription.receive(0.05) is None
+    finally:
+        await events.close()
+
+
+async def test_cancelling_a_running_scan_stops_it_and_keeps_the_partial_results(
+    ana: Analyst,
+    vulnerable_lab: tuple[LocalServer, FastAPI],
+    app: FastAPI,
+    saq_queue: Queue,
+    scanner_engine: AsyncEngine,
+    owner: AsyncEngine,
+) -> None:
+    """CU-14, RF-52, PT-02: SAQ, Redis and the lab, at one request per second."""
+    assert SCANNER_URL and REDIS_URL
+    events = RedisRunEvents.from_url(REDIS_URL)
+    app.state.run_queue = SaqRunQueue(saq_queue)
+    app.state.run_events = events
+    scanner = lab_scanner(scanner_engine, app.state.credential_cipher, ScriptedChecker(), events)
+    server, lab = vulnerable_lab
+    project = await lab_project(ana, server, lab)
+    run_id = await project.launch(["object_access"], requests_per_second=1, concurrency=1)
+    path = f"/projects/{project.id}/runs/{run_id}"
+    settings = ScannerSettings(
+        database_url=SecretStr(SCANNER_URL),
+        redis_url=SecretStr(REDIS_URL),
+        concurrency=1,
+        credential_keys={1: SecretStr(TEST_CREDENTIAL_KEY)},
+    )
+    worker = build_worker(settings, queue=saq_queue, scanner=scanner)
+    running = asyncio.create_task(worker.start())
+    try:
+        streaming = asyncio.create_task(ana.request("GET", f"{path}/events"))
+        await until(owner, run_id, lambda run: run.cells_evaluated >= 1, seconds=20)
+
+        loop = asyncio.get_running_loop()
+        asked = loop.time()
+        response = await ana.request("POST", f"{path}/cancel")
+        assert response.status_code == 202, response.text
+        await until(owner, run_id, lambda run: run.status != "running", seconds=10)
+        stopped = loop.time() - asked
+        stream = await asyncio.wait_for(streaming, timeout=5)
+        job = await saq_queue.job(f"run:{run_id}")
+    finally:
+        await worker.stop()
+        await running
+        await events.close()
+
+    assert stopped < 5  # RF-52
+    run = await stored(owner, run_id)
+    assert (run.status, run.end_reason) == ("cancelled", "cancelled_by_user")
+    assert run.cancel_requested_at is not None
+    assert 1 <= run.cells_evaluated < run.cells_planned
+    async with await owner_session(owner) as db:
+        results = await db.scalar(
+            select(func.count()).select_from(Result).where(Result.run_id == run_id)
+        )
+    assert results == run.cells_evaluated  # the partial results stay
+    assert job is not None
+    assert job.status == "aborted"
+    names = [name for name, _ in sse_events(stream.text)]
+    assert names[0] == "snapshot"
+    assert names[-1] == "end"
+    assert sse_events(stream.text)[-1][1]["status"] == "cancelled"
