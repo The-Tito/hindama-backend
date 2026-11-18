@@ -37,6 +37,10 @@ class RunQueue(Protocol):
         """Enqueues the run and returns the job key."""
         ...
 
+    async def has_job(self, run_id: UUID) -> bool:
+        """Whether the run still has a job waiting or in progress (the reconciliation, CU-23)."""
+        ...
+
     async def abort(self, run_id: UUID) -> None:
         """Stops the run's job: SAQ cancels its task in about a second (RF-52, PT-02). A job that
         is already gone (finished, or lost with a dead scanner) is left alone."""
@@ -75,6 +79,13 @@ class SaqRunQueue:
             return key
         return job.key
 
+    async def has_job(self, run_id: UUID) -> bool:
+        try:
+            job = await self.queue.job(job_key(run_id))
+        except (RedisError, OSError, TimeoutError) as error:
+            raise QueueUnavailableError(type(error).__name__) from error
+        return job is not None and job.status not in TERMINAL_JOB_STATUSES
+
     async def abort(self, run_id: UUID) -> None:
         try:
             job = await self.queue.job(job_key(run_id))
@@ -93,6 +104,9 @@ class UnconfiguredRunQueue:
     """Without `HINDAMA_REDIS_URL` the API still serves everything but launching runs."""
 
     async def enqueue(self, run_id: UUID) -> str:
+        raise QueueUnavailableError("redis_url is not set")
+
+    async def has_job(self, run_id: UUID) -> bool:
         raise QueueUnavailableError("redis_url is not set")
 
     async def abort(self, run_id: UUID) -> None:

@@ -260,6 +260,57 @@ async def test_the_heartbeat_touches_the_job_and_the_row(
     assert run.heartbeat_at > run.started_at
 
 
+async def test_a_failed_beat_does_not_stop_the_heartbeat(
+    project: Project, scanner: Scanner, owner: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Otherwise a live run would stop beating and the reconciliation would fail it (CU-23)."""
+
+    async def slow(*_: Any) -> None:
+        await asyncio.sleep(0.4)
+
+    class Flaky(Touches):
+        async def __call__(self) -> None:
+            await super().__call__()
+            if self.count == 1:
+                raise ConnectionError("redis://:secreto@redis:6379")
+
+    monkeypatch.setattr(execution, "_modules", slow)
+    monkeypatch.setattr(execution, "HEARTBEAT_INTERVAL_SECONDS", 0.05)
+    run_id = await launch(project)
+    touches = Flaky()
+
+    with structlog.testing.capture_logs() as logs:
+        monkeypatch.setattr(execution, "log", structlog.get_logger("test"))
+        await execute(scanner, run_id, touches)
+
+    assert touches.count >= 3  # it kept beating after the failure
+    assert (await stored(owner, run_id)).status == "completed"
+    failed = [entry for entry in logs if entry["event"] == "run_heartbeat_failed"]
+    assert failed == [
+        {
+            "event": "run_heartbeat_failed",
+            "log_level": "warning",
+            "run_id": str(run_id),
+            "error": "ConnectionError",
+        }
+    ]
+    assert "secreto" not in repr(logs)
+
+
+def test_the_worker_schedules_the_reconciliation_and_the_purge() -> None:
+    settings = ScannerSettings(
+        database_url=SecretStr("postgresql+asyncpg://unused@localhost:1/unused"),
+        redis_url=SecretStr("redis://localhost:1/0"),
+        credential_keys={1: SecretStr(TEST_CREDENTIAL_KEY)},
+    )
+
+    worker = build_worker(settings)
+
+    schedules = {job.function.__name__: job.cron for job in worker.cron_jobs}
+    assert schedules == {"reconcile_runs": "*/5 * * * *", "purge_audit": "17 4 * * *"}  # CU-23
+    assert all(job.unique for job in worker.cron_jobs)  # once per schedule, however many scanners
+
+
 async def test_an_error_fails_only_that_run_and_logs_only_its_type(
     project: Project, scanner: Scanner, owner: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
