@@ -6,8 +6,9 @@ that stopped beating, and the scanner against the lab before and after the analy
 """
 
 import datetime as dt
+import json
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -25,7 +26,7 @@ from hindama.scanner.resolution import resolve_not_detected
 from tests.events import MemoryRunEvents
 from tests.integration.conftest import Analyst
 from tests.integration.test_findings import Seeded, add_finding, finish
-from tests.integration.test_run_results import Matrix, add_cells, new_matrix
+from tests.integration.test_run_results import CONTRACT, Matrix, add_cells, new_matrix
 from tests.integration.test_runs import owner_session, start
 from tests.lab.app import Mode, build_lab
 from tests.lab.scanning import lab_project, lab_scanner, run_lab
@@ -330,3 +331,64 @@ async def test_fixing_the_api_resolves_its_findings_and_breaking_it_again_reopen
     assert detail["resolved_at"] is not None
     assert detail["history"][-1]["reason"] == "not_detected"
     assert detail["history"][-1]["run"]["id"] == str(fixed_run)
+
+
+# ------------------------------------------------------------------ administrative closure (RF-69)
+
+
+PATHS: dict[str, Any] = cast(dict[str, Any], CONTRACT["paths"])
+
+
+async def import_contract(analyst: Analyst, project_id: str, paths: dict[str, Any]) -> None:
+    document = {**CONTRACT, "paths": paths}
+    files = {"file": ("openapi.json", json.dumps(document).encode(), "application/json")}
+    response = await analyst.request("POST", f"/projects/{project_id}/contracts", files=files)
+    assert response.status_code == 201, response.text
+
+
+async def test_retiring_an_operation_closes_its_open_findings(
+    ana: Analyst, owner: AsyncEngine
+) -> None:
+    created = await two_runs(ana, owner)
+    seeded = created.seeded
+    await add_finding(owner, seeded, "abierto", operation=USERS, detections=[(0, 1)])
+    await add_finding(
+        owner,
+        seeded,
+        "aceptado",
+        operation=USERS,
+        identity="Cliente B",
+        detections=[(0, 2)],
+        status="accepted_risk",
+        dismissal_reason="accepted_risk",
+        justification="Lo cubre el WAF.",
+    )
+    await add_finding(owner, seeded, "sigue", operation=ORDERS, detections=[(0, 3)])
+    url = f"/projects/{seeded.project.id}/findings"
+
+    without_users = {k: v for k, v in PATHS.items() if k != "/users"}
+    await import_contract(ana, seeded.project.id, without_users)
+    closed = (await ana.request("GET", f"{url}/{seeded.findings['abierto']}")).json()
+    await import_contract(ana, seeded.project.id, PATHS)  # it comes back
+
+    assert await states(owner, created) == {
+        "abierto": ("resolved", "operation_retired"),
+        "aceptado": ("accepted_risk", None),  # only open findings are closed
+        "sigue": ("persistent", None),
+    }
+    assert closed["resolved_at"] is not None
+    assert closed["history"][-1] == {
+        "from_status": "persistent",
+        "to_status": "resolved",
+        "reason": "operation_retired",
+        "run": None,  # the analyst caused it, by importing
+        "justification": None,
+        "occurred_at": closed["history"][-1]["occurred_at"],
+    }
+    async with AsyncSession(owner) as db:
+        days = await db.scalar(
+            select(FindingMetric.days_to_resolve)
+            .join(Finding, Finding.metric_id == FindingMetric.id)
+            .where(Finding.id == created.finding("abierto"))
+        )
+    assert days is None  # not a fix (modelo.md 7.3)
