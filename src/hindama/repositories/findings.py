@@ -126,6 +126,17 @@ async def get(session: AsyncSession, project_id: UUID, finding_id: UUID) -> Find
     return None if row is None else FindingRow(*row)
 
 
+async def lock(session: AsyncSession, project_id: UUID, finding_id: UUID) -> Finding | None:
+    """Serializes the analyst's change with the scanner, which locks the finding the same way
+    before it records a detection (scanner/recorder.py)."""
+    finding: Finding | None = await session.scalar(
+        select(Finding)
+        .where(Finding.project_id == project_id, Finding.id == finding_id)
+        .with_for_update()
+    )
+    return finding
+
+
 async def occurrence(
     session: AsyncSession, project_id: UUID, finding_id: UUID, run_id: UUID
 ) -> OccurrenceRow | None:

@@ -510,3 +510,188 @@ async def test_findings_of_another_analyst_or_project_are_not_found(
     assert [r.status_code for r in responses] == [404] * 6
     assert {r.json()["code"] for r in responses} == {"resource.not_found"}
     assert own_sibling["total"] == 0  # another project of the same analyst sees none
+
+
+# ------------------------------------------------------------------ dismissal (CU-16, RF-70)
+
+
+def dismissal(seeded: Seeded, label: str) -> str:
+    return f"{seeded.url}/{seeded.findings[label]}/dismissal"
+
+
+async def dismiss(seeded: Seeded, label: str, **body: Any) -> Any:
+    payload = {"reason": "accepted_risk", "justification": "Lo cubre el WAF.", **body}
+    return await seeded.project.analyst.request("POST", dismissal(seeded, label), json=payload)
+
+
+async def test_accepting_the_risk_of_an_open_finding(seeded: Seeded) -> None:
+    response = await dismiss(seeded, "critico", justification="  Lo cubre el WAF.\n\tRevisar.  ")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "accepted_risk"
+    event = body["history"][-1]
+    assert event == {
+        "from_status": "new",
+        "to_status": "accepted_risk",
+        "reason": "accepted",
+        "run": None,  # the analyst did it
+        "justification": "Lo cubre el WAF.\n\tRevisar.",  # trimmed, lines kept
+        "occurred_at": event["occurred_at"],
+    }
+    assert body["dismissal"] == {
+        "reason": "accepted_risk",
+        "justification": "Lo cubre el WAF.\n\tRevisar.",
+        "dismissed_at": event["occurred_at"],
+    }
+    assert body == (await seeded.get(f"/{seeded.findings['critico']}")).json()
+    still_open = (await seeded.get("?status=new&status=persistent&status=regression")).json()
+    assert "critico" not in labels(seeded, still_open)
+
+
+@pytest.mark.parametrize("label", ["alto-viejo", "bajo"])  # persistent and new
+async def test_marking_a_false_positive(seeded: Seeded, label: str) -> None:
+    body = (await dismiss(seeded, label, reason="false_positive")).json()
+
+    assert body["dismissal"]["reason"] == "false_positive"
+    assert body["history"][-1]["reason"] == "false_positive"
+
+
+@pytest.mark.parametrize("label", ["cors", "aceptado", "borrada"])  # resolved or already accepted
+async def test_only_an_open_finding_is_dismissed(seeded: Seeded, label: str) -> None:
+    before = (await seeded.get(f"/{seeded.findings[label]}")).json()
+
+    response = await dismiss(seeded, label)
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "finding.not_open"
+    assert (await seeded.get(f"/{seeded.findings[label]}")).json() == before
+
+
+@pytest.mark.parametrize(
+    ("body", "code"),
+    [
+        ({"justification": "   \n\t "}, "validation.required"),  # RN-09: blank is missing
+        ({"justification": None}, "validation.format"),
+        ({"justification": "a" * 2001}, "validation.length"),
+        ({"justification": "con\x00nulo"}, "validation.format"),
+        ({"reason": "won't_fix"}, "validation.format"),
+    ],
+)
+async def test_invalid_dismissals(seeded: Seeded, body: dict[str, Any], code: str) -> None:
+    response = await dismiss(seeded, "critico", **body)
+
+    assert response.status_code == 422, response.text
+    assert [error["code"] for error in response.json()["errors"]] == [code]
+
+
+async def test_a_dismissal_needs_a_justification(seeded: Seeded) -> None:
+    response = await seeded.project.analyst.request(
+        "POST", dismissal(seeded, "critico"), json={"reason": "accepted_risk"}
+    )
+
+    assert response.status_code == 422
+    assert response.json()["errors"][0] == {
+        "field": "justification",
+        "code": "validation.required",
+        "message": "Este campo es obligatorio.",
+    }
+
+
+async def test_reverting_a_dismissal(seeded: Seeded) -> None:
+    response = await seeded.project.analyst.request("DELETE", dismissal(seeded, "aceptado"))
+
+    assert response.status_code == 204
+    assert response.content == b""
+    body = (await seeded.get(f"/{seeded.findings['aceptado']}")).json()
+    assert (body["status"], body["dismissal"]) == ("persistent", None)  # whatever it was before
+    assert body["history"][-1] == {
+        "from_status": "accepted_risk",
+        "to_status": "persistent",
+        "reason": "reverted",
+        "run": None,
+        "justification": None,
+        "occurred_at": body["history"][-1]["occurred_at"],
+    }
+    assert [e["reason"] for e in body["history"]] == ["detected", "false_positive", "reverted"]
+
+
+@pytest.mark.parametrize("label", ["critico", "cors"])  # open and resolved
+async def test_only_a_dismissed_finding_is_reverted(seeded: Seeded, label: str) -> None:
+    response = await seeded.project.analyst.request("DELETE", dismissal(seeded, label))
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "finding.not_dismissed"
+
+
+async def test_dismissing_the_last_open_finding_concludes_the_project(seeded: Seeded) -> None:
+    """RF-73: a completed run and no open finding."""
+    project = f"/projects/{seeded.project.id}"
+    analyst = seeded.project.analyst
+
+    for label in ("critico", "alto-reciente", "alto-viejo"):
+        assert (await dismiss(seeded, label)).status_code == 200
+    almost = (await analyst.request("GET", project)).json()
+    await dismiss(seeded, "bajo")
+    concluded = (await analyst.request("GET", project)).json()
+    await analyst.request("DELETE", dismissal(seeded, "bajo"))
+    reopened = (await analyst.request("GET", project)).json()
+
+    assert (almost["concluded"], concluded["concluded"], reopened["concluded"]) == (
+        False,
+        True,
+        False,
+    )
+
+
+async def test_dismissing_another_analysts_finding_is_not_found(
+    seeded: Seeded, new_analyst: Any
+) -> None:
+    other: Analyst = new_analyst()
+    await other.accept_terms()
+    body = {"reason": "accepted_risk", "justification": "Mío."}
+    missing = f"{seeded.url}/{uuid.uuid4()}/dismissal"
+
+    responses = [
+        await other.request("POST", dismissal(seeded, "critico"), json=body),
+        await other.request("DELETE", dismissal(seeded, "aceptado")),
+        await seeded.project.analyst.request("POST", missing, json=body),
+        await seeded.project.analyst.request("DELETE", missing),
+    ]
+
+    assert [r.status_code for r in responses] == [404] * 4
+    assert (await seeded.get(f"/{seeded.findings['critico']}")).json()["status"] == "new"
+    assert (await seeded.get(f"/{seeded.findings['aceptado']}")).json()["status"] == (
+        "accepted_risk"
+    )
+
+
+async def test_an_accepted_finding_detected_again_stays_accepted(
+    ana: Analyst,
+    vulnerable_lab: tuple[LocalServer, FastAPI],
+    scanner: Scanner,
+) -> None:
+    """CU-16 and CU-17 through the API: accept, run again, revert, run again (ADR-014)."""
+    server, lab = vulnerable_lab
+    project = await lab_project(ana, server, lab)
+    url = findings_url(project.id)
+    await run_lab(scanner, project, lab)
+    finding = (await ana.request("GET", url)).json()["items"][0]["id"]
+    body = {"reason": "accepted_risk", "justification": "Mitigado en el gateway."}
+    assert (await ana.request("POST", f"{url}/{finding}/dismissal", json=body)).status_code == 200
+
+    await run_lab(scanner, project, lab)
+    accepted = (await ana.request("GET", f"{url}/{finding}")).json()
+    await ana.request("DELETE", f"{url}/{finding}/dismissal")
+    await run_lab(scanner, project, lab)
+    reopened = (await ana.request("GET", f"{url}/{finding}")).json()
+
+    assert accepted["status"] == "accepted_risk"
+    assert accepted["last_run"]["number"] == 2  # detected again: a new occurrence
+    assert accepted["dismissal"]["justification"] == "Mitigado en el gateway."
+    assert reopened["status"] == "persistent"
+    assert [(e["reason"], e["run"] is None) for e in reopened["history"]] == [
+        ("detected", False),
+        ("accepted", True),
+        ("reverted", True),
+    ]
