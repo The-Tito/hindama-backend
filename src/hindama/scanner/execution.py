@@ -8,13 +8,22 @@ opens its own short transaction, so the progress and the heartbeat are visible w
 The modules (`scanner/modules`) share one `RequestLimiter` (RF-47) and one `SafeHttpClient` bound
 to the verified host (RF-50). Modules that are not implemented yet plan no cells.
 
-Pending in later tasks: cancellation by the analyst and progress events (3.3), and the
-reconciliation of runs left behind by a dead scanner (3.4, CU-23).
+Progress and cancellation (task 3.3, ADR-006, RF-51, RF-52):
+
+- The `Recorder` tells the API's streams when the run moves (`scanner/progress.py`); `end` is
+  published once the final state is saved.
+- The API cancels by aborting the SAQ job, which cancels this task within about a second, including
+  the request in flight. The final state is written in a shielded task, so a second cancellation
+  cannot leave it half written. Only a run with `cancel_requested_at` ends `cancelled_by_user`:
+  any other cancellation (the worker stopping) leaves the run to the reconciliation (3.4, CU-23).
+- The results of the cells already evaluated stay (RF-52). No module creates resources yet, so
+  there is nothing to clean up (RN-06); the cleanup arrives with the first module that writes.
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 import structlog
@@ -23,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from hindama.core.credentials import CredentialCipher
 from hindama.core.ownership import Outcome, OwnershipChecker, published_code
+from hindama.core.run_events import RunEvent, RunEvents
 from hindama.core.run_queue import HEARTBEAT_INTERVAL_SECONDS
 from hindama.core.safe_http import SafeHttpClient
 from hindama.models import Project, Run
@@ -42,6 +52,7 @@ from hindama.scanner.modules.authentication import Authentication
 from hindama.scanner.modules.configuration import Configuration
 from hindama.scanner.modules.function_access import FunctionAccess
 from hindama.scanner.modules.object_access import ObjectAccess
+from hindama.scanner.progress import Progress
 from hindama.scanner.recorder import Recorder
 from hindama.scanner.requester import Requester
 from hindama.services.projects import run_modules
@@ -84,6 +95,7 @@ class Scanner:
     cipher: CredentialCipher
     # A client bound to the project's host (ADR-008); tests allow their loopback server.
     http_client: Callable[[str], SafeHttpClient]
+    events: RunEvents
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,17 +112,50 @@ async def execute(scanner: Scanner, run_id: UUID, touch: Touch) -> None:
     heartbeat = asyncio.create_task(_beat(scanner, run_id, touch))
     try:
         ending = await _run(scanner, run)
+    except asyncio.CancelledError:
+        # SAQ cancelled the job: the analyst (RF-52) or the worker stopping. The cancellation
+        # goes on to SAQ once the final state is saved.
+        await _shielded(_stopped(scanner, run))
+        raise
     except Exception as error:  # one run failing never takes the process down (ADR-012)
         # Only the type: a message could carry data of the analyst's API.
         log.error("run_error", run_id=str(run_id), error=type(error).__name__)
         ending = Ending(RunStatus.FAILED, EndReason.ERROR)
     finally:
         heartbeat.cancel()
-    await _finish(scanner, run_id, ending)
+    await _shielded(_end(scanner, run, ending))
+
+
+# Tasks that must finish even if the job is cancelled again; kept here so they are not collected.
+_SHIELDED: set[asyncio.Task[None]] = set()
+
+
+async def _shielded(step: Coroutine[Any, Any, None]) -> None:
+    task = asyncio.create_task(step)
+    _SHIELDED.add(task)
+    task.add_done_callback(_SHIELDED.discard)
+    await asyncio.shield(task)
+
+
+async def _stopped(scanner: Scanner, run: Run) -> None:
+    # Under the row lock: if the API is still cancelling, wait for its commit (services/runs.py).
+    async with scanner.session_factory() as session, session.begin():
+        requested = await session.scalar(
+            select(Run.cancel_requested_at).where(Run.id == run.id).with_for_update()
+        )
+    if requested is None:
+        log.warning("run_interrupted", project_id=str(run.project_id), run_id=str(run.id))
+        return
+    await _end(scanner, run, Ending(RunStatus.CANCELLED, EndReason.CANCELLED_BY_USER))
+
+
+async def _end(scanner: Scanner, run: Run, ending: Ending) -> None:
+    await _finish(scanner, run.id, ending)
+    await scanner.events.publish(run.id, RunEvent.END)
     log.info(
         "run_finished",
         project_id=str(run.project_id),
-        run_id=str(run_id),
+        run_id=str(run.id),
         status=ending.status.value,
         end_reason=ending.end_reason.value,
     )
@@ -214,8 +259,22 @@ async def _modules(scanner: Scanner, run: Run) -> None:
         context = await run_context.load(session, scanner.cipher, run)
     modules = [MODULES[module]() for module in run_modules(run.config) if module in MODULES]
     plans = [(module, module.plan(context)) for module in modules]
-    recorder = Recorder(scanner.session_factory, run.id, run.project_id)
-    await recorder.plan(sum(len(cells) for _, cells in plans))
+    progress = Progress(scanner.events, run.id)
+    recorder = Recorder(scanner.session_factory, run.id, run.project_id, progress)
+    try:
+        await recorder.plan(sum(len(cells) for _, cells in plans))
+        await _scan(scanner, run, context, plans, recorder)
+    finally:
+        await progress.close()
+
+
+async def _scan(
+    scanner: Scanner,
+    run: Run,
+    context: run_context.RunContext,
+    plans: Sequence[tuple[ScanModule, Sequence[Cell]]],
+    recorder: Recorder,
+) -> None:
     limits = run.config["limits"]
     limiter = RequestLimiter(
         requests_per_second=limits["requests_per_second"],

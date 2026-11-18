@@ -36,6 +36,7 @@ from hindama.core.destinations import Resolver, SystemResolver
 from hindama.core.identity_probe import IdentityProber
 from hindama.core.logging import configure_logging
 from hindama.core.ownership import NetworkOwnershipChecker, OwnershipChecker, SystemTxtResolver
+from hindama.core.run_events import RedisRunEvents, RunEvents, UnconfiguredRunEvents
 from hindama.core.run_queue import RunQueue, SaqRunQueue, UnconfiguredRunQueue
 from hindama.db.session import create_engine, create_session_factory
 from hindama.models.base import MAX_CONTRACT_BYTES
@@ -53,10 +54,12 @@ def create_app(
     ownership_checker: OwnershipChecker | None = None,
     identity_prober: IdentityProber | None = None,
     run_queue: RunQueue | None = None,
+    run_events: RunEvents | None = None,
 ) -> FastAPI:
     """`verifier` and `profiles` are injected only by tests, with a fake User Pool, `resolver`
     with a fake DNS, `ownership_checker` with a local server or scripted results,
-    `identity_prober` with one that may reach a local server, and `run_queue` with one in memory."""
+    `identity_prober` with one that may reach a local server, and `run_queue` and `run_events` with
+    ones in memory."""
     settings = settings or get_settings()
     configure_logging(settings.log_level, settings.log_format)
     engine = create_engine(settings)
@@ -74,18 +77,25 @@ def create_app(
     cognito_http = httpx.AsyncClient(timeout=5.0, follow_redirects=False)
     profiles = profiles or ProfileClient(endpoint=settings.cognito_idp_endpoint, http=cognito_http)
 
+    redis_url = settings.redis_url
     if run_queue is None:
-        redis_url = settings.redis_url
         run_queue = (
             UnconfiguredRunQueue()
             if redis_url is None
             else SaqRunQueue.from_url(redis_url.get_secret_value())
+        )
+    if run_events is None:  # the progress of runs (ADR-006), in the same Redis as the queue
+        run_events = (
+            UnconfiguredRunEvents()
+            if redis_url is None
+            else RedisRunEvents.from_url(redis_url.get_secret_value())
         )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         yield
         await run_queue.close()
+        await run_events.close()
         await jwks_http.aclose()
         await cognito_http.aclose()
         await engine.dispose()
@@ -113,6 +123,7 @@ def create_app(
     app.state.credential_cipher = settings.credential_cipher()
     app.state.identity_prober = identity_prober
     app.state.run_queue = run_queue
+    app.state.run_events = run_events
 
     register_problem_handlers(app)
     # The last one added is the outermost: request context wraps authentication.

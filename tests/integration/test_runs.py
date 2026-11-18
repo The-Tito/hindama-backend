@@ -1,8 +1,11 @@
-"""`/projects/{project_id}/runs` (CU-12; RF-44 to RF-47, RF-63, RN-01, RN-05, RN-07).
+"""`/projects/{project_id}/runs` (CU-12 to CU-14; RF-44 to RF-47, RF-51, RF-52, RF-63, RN-01,
+RN-05, RN-07).
 
-The queue is in memory here; the scanner tests (test_scanner.py) use Redis.
+The queue and the progress events are in memory here; the scanner tests (test_scanner.py) use Redis
+and cancel a run while it scans the lab.
 """
 
+import asyncio
 import json
 import uuid
 from typing import Any
@@ -12,8 +15,10 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from hindama.core.run_events import RunEvent
 from hindama.core.run_queue import RunQueue
 from hindama.models import Run
+from tests.events import MemoryRunEvents
 from tests.integration.conftest import Analyst
 from tests.queue import FailingRunQueue, MemoryRunQueue
 
@@ -79,6 +84,26 @@ async def finish(owner: AsyncEngine, run_id: str, status: str = "completed") -> 
         run.end_reason = reasons[status]
         run.started_at = func.now()
         run.finished_at = func.now()
+
+
+async def start(owner: AsyncEngine, run_id: str) -> None:
+    """As the scanner does when it takes the job."""
+    async with await owner_session(owner) as db, db.begin():
+        run = await db.get(Run, UUID(run_id))
+        assert run is not None
+        run.status = "running"
+        run.started_at = func.now()
+        run.heartbeat_at = func.now()
+
+
+def sse_events(body: str) -> list[tuple[str, dict[str, Any]]]:
+    """`(event, data)` of a stream, without `retry` and pings."""
+    result = []
+    for block in body.split("\n\n"):
+        fields = dict(line.split(": ", 1) for line in block.splitlines() if ": " in line)
+        if "event" in fields:
+            result.append((fields["event"], json.loads(fields["data"])))
+    return result
 
 
 # ------------------------------------------------------------------ launch (CU-12)
@@ -335,3 +360,188 @@ async def test_the_dashboard_shows_the_launched_run(project: Project) -> None:
 
     assert body["last_run"]["id"] == created["id"]
     assert body["last_run"]["status"] == "queued"
+
+
+# ------------------------------------------------------------------ cancel (CU-14, RF-52)
+
+
+async def test_a_queued_run_is_cancelled_at_once(
+    project: Project, run_queue: MemoryRunQueue, run_events: MemoryRunEvents
+) -> None:
+    created = (await project.launch()).json()
+
+    response = await project.analyst.request("POST", f"{project.runs}/{created['id']}/cancel")
+
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert (body["status"], body["end_reason"]) == ("cancelled", "cancelled_by_user")
+    assert body["cancel_requested_at"] is not None
+    assert body["finished_at"] is not None
+    assert body["progress"]["status"] == "cancelled"
+    assert run_queue.aborted == [UUID(created["id"])]
+    assert run_events.of(UUID(created["id"])) == [RunEvent.END]  # its streams close
+    # The project is free for another run (RN-07).
+    assert (await project.launch()).status_code == 202
+
+
+async def test_a_running_run_gets_the_request_and_its_job_is_aborted(
+    project: Project, run_queue: MemoryRunQueue, run_events: MemoryRunEvents, owner: AsyncEngine
+) -> None:
+    created = (await project.launch()).json()
+    await start(owner, created["id"])
+    path = f"{project.runs}/{created['id']}/cancel"
+
+    first = await project.analyst.request("POST", path)
+    again = await project.analyst.request("POST", path)
+
+    assert first.status_code == again.status_code == 202
+    body = first.json()
+    assert (body["status"], body["end_reason"]) == ("running", None)  # the scanner ends it
+    assert body["cancel_requested_at"] is not None
+    # Repeating it while the run stops answers the same (contract).
+    assert again.json()["cancel_requested_at"] == body["cancel_requested_at"]
+    assert run_queue.aborted == [UUID(created["id"])] * 2
+    assert run_events.of(UUID(created["id"])) == []  # `end` comes from the scanner
+
+
+@pytest.mark.parametrize("status", ["completed", "cancelled", "failed"])
+async def test_a_finished_run_cannot_be_cancelled(
+    project: Project, owner: AsyncEngine, run_queue: MemoryRunQueue, status: str
+) -> None:
+    created = (await project.launch()).json()
+    await finish(owner, created["id"], status)
+
+    response = await project.analyst.request("POST", f"{project.runs}/{created['id']}/cancel")
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "run.not_active"  # CU-14 E1
+    assert run_queue.aborted == []
+
+
+async def test_cancelling_another_analysts_run_is_not_found(
+    project: Project, new_analyst: Any, run_queue: MemoryRunQueue, owner: AsyncEngine
+) -> None:
+    created = (await project.launch()).json()
+    other: Analyst = new_analyst()
+    await other.accept_terms()
+
+    response = await other.request("POST", f"{project.runs}/{created['id']}/cancel")
+    missing = await project.analyst.request("POST", f"{project.runs}/{uuid.uuid4()}/cancel")
+
+    assert response.status_code == missing.status_code == 404  # RN-02: not 403
+    assert run_queue.aborted == []
+    async with await owner_session(owner) as db:
+        run = await db.get(Run, UUID(created["id"]))
+    assert run is not None
+    assert (run.status, run.cancel_requested_at) == ("queued", None)
+
+
+@pytest.fixture
+def failing_queue() -> MemoryRunQueue:
+    """Accepts the launch; Redis goes down before the cancellation."""
+    queue = MemoryRunQueue()
+
+    async def down(run_id: UUID) -> None:
+        await FailingRunQueue().abort(run_id)
+
+    queue.abort = down  # type: ignore[method-assign]
+    return queue
+
+
+async def test_without_the_queue_a_running_run_is_not_cancelled(
+    ana: Analyst, owner: AsyncEngine, app: Any, failing_queue: MemoryRunQueue
+) -> None:
+    app.state.run_queue = failing_queue
+    project = await new_project(ana)
+    created = (await project.launch()).json()
+    await start(owner, created["id"])
+
+    response = await project.analyst.request("POST", f"{project.runs}/{created['id']}/cancel")
+
+    assert response.status_code == 503  # nothing would stop the scanner
+    async with await owner_session(owner) as db:
+        run = await db.get(Run, UUID(created["id"]))
+    assert run is not None
+    assert (run.status, run.cancel_requested_at) == ("running", None)  # rolled back
+
+
+async def test_without_the_queue_a_queued_run_is_still_cancelled(
+    ana: Analyst, app: Any, failing_queue: MemoryRunQueue
+) -> None:
+    app.state.run_queue = failing_queue
+    project = await new_project(ana)
+    created = (await project.launch()).json()
+
+    response = await project.analyst.request("POST", f"{project.runs}/{created['id']}/cancel")
+
+    assert response.status_code == 202  # the scanner skips a job whose run is not queued
+    assert response.json()["status"] == "cancelled"
+
+
+# ------------------------------------------------------------------ progress (CU-13, RF-51)
+
+
+async def test_the_stream_of_a_finished_run_is_snapshot_and_end(
+    project: Project, owner: AsyncEngine
+) -> None:
+    created = (await project.launch()).json()
+    await finish(owner, created["id"])
+
+    response = await project.analyst.request("GET", f"{project.runs}/{created['id']}/events")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.text.startswith("retry: 3000\n\nid: 1\nevent: snapshot\n")
+    run = (await project.analyst.request("GET", f"{project.runs}/{created['id']}")).json()
+    assert sse_events(response.text) == [("snapshot", run), ("end", run)]
+
+
+async def test_reconnecting_starts_again_with_a_snapshot(
+    project: Project, owner: AsyncEngine
+) -> None:
+    created = (await project.launch()).json()
+    await finish(owner, created["id"])
+
+    analyst = project.analyst
+    response = await analyst.client.get(
+        f"{project.runs}/{created['id']}/events",
+        headers={**analyst.headers, "Last-Event-ID": "41"},
+    )
+
+    assert response.text.startswith("retry: 3000\n\nid: 42\nevent: snapshot\n")  # CU-13 A1
+
+
+async def test_the_stream_ends_when_a_queued_run_is_cancelled(
+    project: Project, run_events: MemoryRunEvents
+) -> None:
+    created = (await project.launch()).json()
+    path = f"{project.runs}/{created['id']}"
+    streaming = asyncio.create_task(project.analyst.request("GET", f"{path}/events"))
+    await asyncio.wait_for(run_events.subscribed.wait(), timeout=5)
+
+    cancelled = await project.analyst.request("POST", f"{path}/cancel")
+    response = await asyncio.wait_for(streaming, timeout=5)
+
+    assert cancelled.status_code == 202
+    events = sse_events(response.text)
+    assert [name for name, _ in events] == ["snapshot", "end"]
+    # The snapshot is the database when the stream read it: the cancellation may be committed
+    # by then. Either way the stream ends with the cancelled run.
+    assert events[0][1]["status"] in ("queued", "cancelled")
+    assert events[1][1] == cancelled.json()
+    assert run_events.listening(UUID(created["id"])) == 0
+
+
+async def test_the_stream_of_another_analysts_run_is_not_found(
+    project: Project, new_analyst: Any, run_events: MemoryRunEvents
+) -> None:
+    created = (await project.launch()).json()
+    other: Analyst = new_analyst()
+    await other.accept_terms()
+
+    response = await other.request("GET", f"{project.runs}/{created['id']}/events")
+
+    assert response.status_code == 404  # RN-02
+    assert response.headers["content-type"] == "application/problem+json"
+    assert run_events.subscribers == {}  # it never subscribed

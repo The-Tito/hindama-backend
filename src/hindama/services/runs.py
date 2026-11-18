@@ -1,9 +1,14 @@
-"""Runs (CU-12; RF-44 to RF-47, RN-01, RN-05, RN-07).
+"""Runs (CU-12, CU-14; RF-44 to RF-47, RF-52, RN-01, RN-05, RN-07).
 
 The API only creates the run and enqueues its id; the scanner executes it (ADR-012). The job is
 enqueued before this transaction commits, so a failure of Redis rolls the run back and the project
 never keeps a `queued` run without a job (RN-07). The scanner, in turn, waits a moment for the row
 to become visible (scanner/execution.py).
+
+Cancelling (RF-52, ADR-006 as implemented in task 3.3): a queued run ends here and now; a running
+one keeps `cancel_requested_at` and its SAQ job is aborted, which cancels the scanner's task. The
+row stays locked until this transaction commits, and the scanner reads the request under the same
+lock, so it never misses it.
 """
 
 from collections.abc import Collection, Sequence
@@ -12,7 +17,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
@@ -25,7 +30,14 @@ from hindama.core.errors import (
 )
 from hindama.core.run_queue import QueueUnavailableError, RunQueue
 from hindama.models import ContractVersion, Run
-from hindama.models.enums import CreatedResourceStatus, Module, RunStatus, Severity
+from hindama.models.enums import (
+    ACTIVE_RUN_STATUSES,
+    CreatedResourceStatus,
+    EndReason,
+    Module,
+    RunStatus,
+    Severity,
+)
 from hindama.repositories import projects as projects_repository
 from hindama.repositories import runs as repository
 from hindama.services.projects import MODULE_RISK, is_verified, module_availability, run_modules
@@ -154,6 +166,53 @@ async def create_run(
         findings=dict.fromkeys(Severity, 0),
         created_resources=dict.fromkeys(CreatedResourceStatus, 0),
     )
+
+
+# ------------------------------------------------------------------ cancel (CU-14)
+
+
+@dataclass(frozen=True, slots=True)
+class Cancellation:
+    view: RunView
+    ended: bool  # the run ended here (it was queued): nobody else publishes its `end`
+
+
+async def cancel_run(
+    session: AsyncSession, queue: RunQueue, project_id: UUID, run_id: UUID
+) -> Cancellation:
+    run = await repository.lock(session, project_id, run_id)
+    if run is None:
+        raise NotFoundError()
+    if run.status not in ACTIVE_RUN_STATUSES:
+        raise ConflictError(
+            "run.not_active",
+            "La ejecución ya terminó",
+            "Solo se puede cancelar una ejecución en cola o en curso.",
+        )
+    if run.cancel_requested_at is None:  # repeating it answers the same (contract)
+        run.cancel_requested_at = func.now()
+    queued = run.status == RunStatus.QUEUED
+    if queued:
+        run.status = RunStatus.CANCELLED
+        run.end_reason = EndReason.CANCELLED_BY_USER
+        run.finished_at = func.now()
+    try:
+        await queue.abort(run.id)
+    except QueueUnavailableError as error:
+        log.warning("run_queue_unavailable", project_id=str(project_id), error=str(error))
+        if not queued:  # nothing would stop the scanner: roll back and say so
+            raise ServiceUnavailableError() from error
+        # A queued run is already over: if its job still runs, the scanner skips it.
+    await session.flush()
+    await session.refresh(run)
+    # RF-81 (bitácora) is pending: until then, the log keeps the event.
+    log.info(
+        "run_cancel_requested",
+        project_id=str(project_id),
+        run_id=str(run_id),
+        status=run.status,
+    )
+    return Cancellation(view=await _view(session, run), ended=queued)
 
 
 # ------------------------------------------------------------------ queries
