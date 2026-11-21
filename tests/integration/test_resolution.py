@@ -20,7 +20,7 @@ from hindama.db.session import create_session_factory
 from hindama.models import Finding, FindingEvent, FindingMetric, Run
 from hindama.models.enums import EndReason, RunStatus
 from hindama.scanner import execution
-from hindama.scanner.execution import Scanner
+from hindama.scanner.execution import Scanner, execute
 from hindama.scanner.reconciliation import reconcile
 from hindama.scanner.resolution import resolve_not_detected
 from tests.events import MemoryRunEvents
@@ -29,7 +29,7 @@ from tests.integration.test_findings import Seeded, add_finding, finish
 from tests.integration.test_run_results import CONTRACT, Matrix, add_cells, new_matrix
 from tests.integration.test_runs import owner_session, start
 from tests.lab.app import Mode, build_lab
-from tests.lab.scanning import lab_project, lab_scanner, run_lab
+from tests.lab.scanning import lab_project, lab_scanner, nothing, run_lab
 from tests.ownership import ScriptedChecker
 from tests.queue import MemoryRunQueue
 from tests.servers import LocalServer
@@ -331,6 +331,39 @@ async def test_fixing_the_api_resolves_its_findings_and_breaking_it_again_reopen
     assert detail["resolved_at"] is not None
     assert detail["history"][-1]["reason"] == "not_detected"
     assert detail["history"][-1]["run"]["id"] == str(fixed_run)
+
+
+async def test_rerunning_after_the_fix_concludes_the_project(
+    ana: Analyst,
+    switchable_lab: tuple[LocalServer, FastAPI],
+    scanner_engine: AsyncEngine,
+    app: FastAPI,
+) -> None:
+    """CU-17 end to end: vulnerable, fixed, «volver a probar» (RF-71) and concluded (RF-73)."""
+    server, lab = switchable_lab
+    scanner: Scanner = lab_scanner(scanner_engine, app.state.credential_cipher, ScriptedChecker())
+    project = await lab_project(ana, server, lab)
+    modules = ("object_access", "function_access", "authentication", "configuration")
+    first = await run_lab(scanner, project, lab, modules, requests_per_second=20, concurrency=3)
+    found = await project.call("GET", "/findings")
+    lab.state.mode = Mode.SECURE  # the analyst fixes the API
+
+    rerun = await project.call("POST", f"/runs/{first}/rerun", json={})
+    lab.state.seen.clear()
+    await execute(scanner, UUID(rerun["id"]), nothing)
+
+    original = await project.call("GET", f"/runs/{first}")
+    repeated = await project.call("GET", f"/runs/{rerun['id']}")
+    after = await project.call("GET", "/findings")
+    dashboard = await project.call("GET", "")
+    assert found["total"] > 0
+    assert {item["status"] for item in found["items"]} == {"new"}
+    assert repeated["source_run_id"] == str(first)
+    assert repeated["status"] == "completed"
+    assert (repeated["modules"], repeated["limits"]) == (original["modules"], original["limits"])
+    assert {item["status"] for item in after["items"]} == {"resolved"}
+    assert after["total"] == found["total"]
+    assert dashboard["concluded"] is True
 
 
 # ------------------------------------------------------------------ administrative closure (RF-69)

@@ -545,3 +545,143 @@ async def test_the_stream_of_another_analysts_run_is_not_found(
     assert response.status_code == 404  # RN-02
     assert response.headers["content-type"] == "application/problem+json"
     assert run_events.subscribers == {}  # it never subscribed
+
+
+# ------------------------------------------------------------------ rerun (CU-17, RF-71)
+
+
+async def rerun(project: Project, run_id: str, **body: Any) -> Any:
+    return await project.analyst.request("POST", f"{project.runs}/{run_id}/rerun", json=body)
+
+
+async def test_rerun_copies_the_configuration(
+    ana: Analyst, owner: AsyncEngine, run_queue: MemoryRunQueue
+) -> None:
+    project = await new_project(ana, contract=True)
+    limits = {
+        "requests_per_second": 7,
+        "concurrency": 1,
+        "max_requests": 10,
+        "max_duration_minutes": 2,
+    }
+    original = (
+        await project.launch(modules=["configuration", "authentication"], limits=limits)
+    ).json()
+    await finish(owner, original["id"])
+
+    response = await rerun(project, original["id"])
+
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert response.headers["Location"] == f"{project.runs}/{body['id']}"
+    assert body["number"] == 2
+    assert body["status"] == "queued"
+    assert body["source_run_id"] == original["id"]
+    assert body["modules"] == original["modules"] == ["authentication", "configuration"]
+    assert body["limits"] == original["limits"] == limits
+    assert body["contract_version"] == original["contract_version"]
+    assert run_queue.enqueued[-1] == UUID(body["id"])
+    fetched = await project.analyst.request("GET", f"{project.runs}/{body['id']}")
+    assert fetched.json() == body
+    assert original["source_run_id"] is None
+
+
+async def test_any_finished_run_can_be_repeated(project: Project, owner: AsyncEngine) -> None:
+    first = (await project.launch(limits={"concurrency": 1})).json()
+    await finish(owner, first["id"], "failed")
+    second = (await project.launch()).json()
+    await finish(owner, second["id"], "cancelled")
+
+    response = await rerun(project, first["id"])
+
+    assert response.status_code == 202, response.text
+    assert response.json()["source_run_id"] == first["id"]
+    assert response.json()["limits"]["concurrency"] == 1
+
+
+async def test_rerunning_an_active_run_is_the_projects_active_run(project: Project) -> None:
+    created = (await project.launch()).json()
+
+    response = await rerun(project, created["id"])
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "project.active_run"  # RN-07
+
+
+async def test_rerun_needs_a_verified_project(project: Project, owner: AsyncEngine) -> None:
+    created = (await project.launch()).json()
+    await finish(owner, created["id"])
+    edited = await project.analyst.request(
+        "PATCH", f"/projects/{project.id}", json={"base_url": "https://otra.ejemplo.com"}
+    )
+    assert edited.status_code == 200
+
+    response = await rerun(project, created["id"])
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "project.not_verified"  # RN-01
+
+
+async def test_rerun_asks_for_the_risk_confirmation_again(ana: Analyst, owner: AsyncEngine) -> None:
+    project = await new_project(ana, contract=True)
+    original = (await project.launch(modules=["sql_injection"], confirm_risk=True)).json()
+    await finish(owner, original["id"])
+
+    refused = await rerun(project, original["id"])
+    accepted = await rerun(project, original["id"], confirm_risk=True)
+
+    assert refused.status_code == 422
+    assert refused.json()["code"] == "run.risk_not_confirmed"  # RF-46: in every run
+    assert refused.json()["errors"][0]["field"] == "confirm_risk"
+    assert accepted.status_code == 202, accepted.text
+    assert accepted.json()["risk_confirmed"] is True
+
+
+async def test_a_module_no_longer_available_is_not_dropped(
+    project: Project, owner: AsyncEngine
+) -> None:
+    created = (await project.launch()).json()
+    await finish(owner, created["id"])
+    async with await owner_session(owner) as db, db.begin():  # as if its requirements were lost
+        run = await db.get(Run, UUID(created["id"]))
+        assert run is not None
+        run.config = {**run.config, "modules": ["authentication", "configuration"]}
+
+    response = await rerun(project, created["id"])
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "run.module_unavailable"
+    assert [e["field"] for e in body["errors"]] == ["modules.0"]  # authentication: no contract
+
+
+@pytest.mark.parametrize("body", [{"extra": True}, {"confirm_risk": "maybe"}])
+async def test_invalid_rerun_bodies(project: Project, owner: AsyncEngine, body: Any) -> None:
+    created = (await project.launch()).json()
+    await finish(owner, created["id"])
+
+    response = await rerun(project, created["id"], **body)
+
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "validation.failed"
+
+
+async def test_rerunning_another_analysts_or_projects_run_is_not_found(
+    project: Project, ana: Analyst, new_analyst: Any, owner: AsyncEngine, run_queue: MemoryRunQueue
+) -> None:
+    created = (await project.launch()).json()
+    await finish(owner, created["id"])
+    enqueued = len(run_queue.enqueued)
+    other: Analyst = new_analyst()
+    await other.accept_terms()
+    others_project = await new_project(other)
+    sibling = await new_project(ana)
+
+    foreign = await other.request("POST", f"{project.runs}/{created['id']}/rerun", json={})
+    crossed = await other.request("POST", f"{others_project.runs}/{created['id']}/rerun", json={})
+    wrong_project = await rerun(sibling, created["id"])
+    missing = await rerun(project, str(uuid.uuid4()))
+
+    statuses = {r.status_code for r in (foreign, crossed, wrong_project, missing)}
+    assert statuses == {404}  # RN-02: not 403
+    assert len(run_queue.enqueued) == enqueued

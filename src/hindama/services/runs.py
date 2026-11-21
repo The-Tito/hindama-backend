@@ -1,4 +1,4 @@
-"""Runs (CU-12, CU-14, CU-15; RF-44 to RF-47, RF-52, RF-64, RN-01, RN-05, RN-07).
+"""Runs (CU-12, CU-14, CU-15, CU-17; RF-44 to RF-47, RF-52, RF-64, RF-71, RN-01, RN-05, RN-07).
 
 The API only creates the run and enqueues its id; the scanner executes it (ADR-012). The job is
 enqueued before this transaction commits, so a failure of Redis rolls the run back and the project
@@ -89,6 +89,7 @@ async def create_run(
     modules: Sequence[Module],
     limits: dict[str, Any],
     confirm_risk: bool,
+    source_run_id: UUID | None = None,
 ) -> RunView:
     project = await repository.lock_project(session, project_id)
     if project is None:
@@ -139,6 +140,7 @@ async def create_run(
         project_id=project_id,
         number=await repository.next_number(session, project_id),
         contract_version_id=None if contract is None else contract.id,
+        source_run_id=source_run_id,
         # As validated (modelo.md 3.3): repeating a run is copying this field.
         config={
             "modules": [module.value for module in ordered],
@@ -160,6 +162,7 @@ async def create_run(
         "run_created",
         project_id=str(project_id),
         run_id=str(run.id),
+        source_run_id=None if source_run_id is None else str(source_run_id),
         modules=[module.value for module in ordered],
     )
     return RunView(
@@ -167,6 +170,32 @@ async def create_run(
         contract=contract,
         findings=dict.fromkeys(Severity, 0),
         created_resources=dict.fromkeys(CreatedResourceStatus, 0),
+    )
+
+
+# ------------------------------------------------------------------ rerun (CU-17)
+
+
+async def rerun_run(
+    session: AsyncSession, queue: RunQueue, project_id: UUID, run_id: UUID, *, confirm_risk: bool
+) -> RunView:
+    """RF-71: a new run with the modules and limits of `run_id`, validated as a new one.
+
+    The risk confirmation is asked again (RF-46), a module that no longer meets its requirements
+    is refused instead of dropped, and an active `run_id` is refused as the project's active run
+    (RN-07).
+    """
+    source = await repository.get(session, project_id, run_id)
+    if source is None:
+        raise NotFoundError()
+    return await create_run(
+        session,
+        queue,
+        project_id,
+        modules=[Module(module) for module in source.config["modules"]],
+        limits=dict(source.config["limits"]),
+        confirm_risk=confirm_risk,
+        source_run_id=source.id,
     )
 
 
