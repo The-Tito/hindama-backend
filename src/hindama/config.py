@@ -68,6 +68,8 @@ class Settings(CredentialKeySettings):
     # Redis of the run queue (ADR-012), with its password: redis://:pass@redis:6379/0. Without it
     # the API answers 503 when launching a run; everything else works.
     redis_url: SecretStr | None = None
+    # RNF-09: requests per minute per user, counted in that Redis. Without Redis, no limit.
+    rate_limit_per_minute: int = Field(default=100, ge=1)
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_format: Literal["json", "console"] = "json"

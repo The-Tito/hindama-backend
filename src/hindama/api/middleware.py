@@ -1,4 +1,4 @@
-"""HTTP middleware: request context, authentication and the upload limit.
+"""HTTP middleware: request context, authentication, the rate limit and the upload limit.
 
 RequestContextMiddleware is the outermost one: request id, access log and last-resort error
 handling. Both are pure ASGI middleware (not BaseHTTPMiddleware) so they also work with streaming
@@ -15,10 +15,12 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from hindama.api.problems import (
     app_error_response,
     internal_error_response,
+    problem_response,
     unauthenticated_response,
 )
 from hindama.core.auth import InvalidTokenError, TokenVerifier
 from hindama.core.errors import AppError
+from hindama.core.rate_limit import RateLimiter
 from hindama.core.request_context import (
     REQUEST_ID_HEADER,
     accept_or_generate,
@@ -109,6 +111,37 @@ class AuthenticationMiddleware:
 
         scope.setdefault("state", {})["principal"] = principal
         await self.app(scope, receive, send)
+
+
+class RateLimitMiddleware:
+    """At most `limit` requests per minute per user (RNF-09): 429 with `Retry-After`.
+
+    It runs right after authentication, so the user is the token's `sub` (never something the
+    client chooses) and a request without a session is rejected before it counts.
+    """
+
+    def __init__(self, app: ASGIApp, limiter: RateLimiter) -> None:
+        self.app = app
+        self.limiter = limiter
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        principal = scope.get("state", {}).get("principal") if scope["type"] == "http" else None
+        if principal is None:  # a public path
+            await self.app(scope, receive, send)
+            return
+        retry_after = await self.limiter.hit(principal.cognito_sub)
+        if retry_after is None:
+            await self.app(scope, receive, send)
+            return
+        log.info("rate_limited", path=scope["path"], retry_after=retry_after)
+        response = problem_response(
+            429,
+            "rate_limit.exceeded",
+            "Demasiadas peticiones",
+            "Superaste el límite de peticiones por minuto. Espera un momento e intenta de nuevo.",
+            headers={"Retry-After": str(retry_after)},
+        )
+        await response(scope, receive, send)
 
 
 class UploadLimitMiddleware:
