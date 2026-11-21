@@ -85,7 +85,7 @@ Ejecuta la carpeta en orden. Puedes hacerlo petición por petición, o todo junt
 | 04–05 | Verificar la propiedad por archivo (ver abajo). |
 | 06–08 | Importar el contrato del laboratorio por URL y aplicar las políticas del catálogo. |
 | 09–11 | Crear las identidades ana, beto y raiz, y los recursos de cada una. |
-| 12–19 | Lanzar la ejecución, ver su progreso (SSE), la matriz y los hallazgos. |
+| 12–20 | Lanzar la ejecución, ver su progreso (SSE), la matriz y los hallazgos; volver a probar y ver el proyecto. |
 
 **Verificación por archivo (paso 04).** La consola de Postman muestra el comando que escribe el código:
 
@@ -95,7 +95,7 @@ echo 'hindama-verificacion=…' > tests/lab/.verificacion.txt
 
 El laboratorio lee ese archivo en cada petición, así que no hace falta reiniciarlo. El archivo lo ignora git.
 
-**Corregir y volver a probar.** Detén el laboratorio y levántalo con `--mode secure`. El túnel conserva su URL. Repite el paso 12: los hallazgos pasan a resueltos y el paso 19 muestra el proyecto concluido.
+**Corregir y volver a probar.** Detén el laboratorio y levántalo con `--mode secure`. El túnel conserva su URL. Corre el paso 19 («Volver a probar», RF-71) y repite el 13 hasta `completed`: los hallazgos pasan a resueltos y el paso 20 muestra el proyecto concluido.
 
 ## 5. Notas
 

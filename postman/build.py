@@ -553,8 +553,7 @@ def lab_flow() -> dict[str, Any]:
             "12 Lanzar ejecución",
             "POST",
             p + "/runs",
-            "Los cuatro módulos implementados. Con el laboratorio en modo `secure`, repetir este "
-            "paso resuelve los hallazgos.",
+            "Los cuatro módulos implementados.",
             body={
                 "modules": ["object_access", "function_access", "authentication", "configuration"],
                 "limits": {"requests_per_second": 5, "concurrency": 2},
@@ -595,10 +594,20 @@ def lab_flow() -> dict[str, Any]:
         ),
         step("18 Ocurrencias del hallazgo", "GET", p + "/findings/{{finding_id}}/occurrences", ""),
         step(
-            "19 Proyecto",
+            "19 Volver a probar",
+            "POST",
+            p + "/runs/{{run_id}}/rerun",
+            "CU-17, RF-71. Con el laboratorio en modo `secure`: repite la ejecución con la misma "
+            "configuración y resuelve los hallazgos (RF-68). La confirmación de riesgo se pide de "
+            "nuevo (RF-46). Después, repetir el paso 13 hasta `completed`.",
+            body={"confirm_risk": True},
+            captures={"run_id": "body.id"},
+        ),
+        step(
+            "20 Proyecto",
             "GET",
             p,
-            "Tras corregir el laboratorio y repetir el paso 12, el proyecto queda concluido "
+            "Tras volver a probar con el laboratorio corregido, el proyecto queda concluido "
             "(RF-73).",
         ),
     ]

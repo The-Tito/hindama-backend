@@ -1,6 +1,6 @@
 {
   "info": {
-    "name": "Hindama API 0.5.0",
+    "name": "Hindama API 0.6.0",
     "description": "Generada desde el contrato con `uv run python -m postman.build`. No editar a mano.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
@@ -960,7 +960,7 @@
                 "runs"
               ]
             },
-            "description": "Los cuatro módulos implementados. Con el laboratorio en modo `secure`, repetir este paso resuelve los hallazgos.",
+            "description": "Los cuatro módulos implementados.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"modules\": [\n    \"object_access\",\n    \"function_access\",\n    \"authentication\",\n    \"configuration\"\n  ],\n  \"limits\": {\n    \"requests_per_second\": 5,\n    \"concurrency\": 2\n  },\n  \"confirm_risk\": true\n}",
@@ -1131,7 +1131,57 @@
           }
         },
         {
-          "name": "19 Proyecto",
+          "name": "19 Volver a probar",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/projects/{{project_id}}/runs/{{{run_id}}}/rerun",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "projects",
+                "{{project_id}}",
+                "runs",
+                "{{{run_id}}}",
+                "rerun"
+              ]
+            },
+            "description": "CU-17, RF-71. Con el laboratorio en modo `secure`: repite la ejecución con la misma configuración y resuelve los hallazgos (RF-68). La confirmación de riesgo se pide de nuevo (RF-46). Después, repetir el paso 13 hasta `completed`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"confirm_risk\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code < 300 && pm.response.text()) {",
+                  "  const body = pm.response.json();",
+                  "  const run_id = body.id;",
+                  "  if (run_id) { pm.collectionVariables.set('run_id', run_id); }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "20 Proyecto",
           "request": {
             "method": "GET",
             "header": [],
@@ -1145,7 +1195,7 @@
                 "{{project_id}}"
               ]
             },
-            "description": "Tras corregir el laboratorio y repetir el paso 12, el proyecto queda concluido (RF-73)."
+            "description": "Tras volver a probar con el laboratorio corregido, el proyecto queda concluido (RF-73)."
           }
         }
       ]
@@ -10458,6 +10508,439 @@
                     "{{run_id}}",
                     "cancel"
                   ]
+                }
+              },
+              "status": "503 `service.unavailable`: una dependencia no responde.",
+              "code": 503,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/problem+json"
+                }
+              ],
+              "body": "{\n  \"type\": \"urn:hindama:error:url.destination_not_allowed\",\n  \"title\": \"texto\",\n  \"status\": 1,\n  \"detail\": \"texto\",\n  \"code\": \"url.destination_not_allowed\",\n  \"request_id\": \"texto\",\n  \"errors\": [\n    {\n      \"field\": \"texto\",\n      \"code\": \"texto\",\n      \"message\": \"texto\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "Volver a probar",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/projects/{{project_id}}/runs/{{run_id}}/rerun",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "projects",
+                "{{project_id}}",
+                "runs",
+                "{{run_id}}",
+                "rerun"
+              ]
+            },
+            "description": "`rerunRun`\n\nCU-17, RF-71. Lanza una ejecución nueva con la misma configuración (`modules` y `limits`) que\n`run_id`, que puede ser cualquier ejecución terminada del proyecto. La nueva trae\n`source_run_id` igual a `run_id`; lo demás es como en `createRun`.\n\nValida lo mismo y en el mismo orden que `createRun`:\n\n1. El proyecto está verificado (RN-01) y no tiene otra ejecución activa (RN-07). Si `run_id`\n   sigue activa, responde `project.active_run`.\n2. Cada módulo de la ejecución original sigue cumpliendo sus requisitos (RF-45). Si uno ya no\n   los cumple, responde `run.module_unavailable`: no se quita en silencio.\n3. Si hay un módulo de riesgo medio o alto, `confirm_risk` es `true` (RN-05, RF-46). La\n   confirmación de la ejecución original no vale: se pide en cada ejecución.\n\nResponde 202 con la ejecución en `queued`, con la versión vigente del contrato (que puede ser\nmás nueva que la de la original).\n\n**Respuestas:**\n- `202`: Ejecución en cola.\n- `400`: `request.malformed`: cuerpo ilegible o tipo de contenido incorrecto.\n- `401`: `auth.required` o `auth.invalid_token`. Next.js debe renovar el token o cerrar la sesión.\n- `403`: `role.forbidden`: el administrador no accede al contenido de los proyectos (RF-80).\n- `404`: `resource.not_found`: no existe o pertenece a otro analista; las dos respuestas son idénticas (RN-02, RNF-05).\n- `409`: `project.not_verified` (RN-01) o `project.active_run` (RN-07).\n- `422`: - `validation.*`.\n- `run.module_unavailable`: un módulo de la ejecución original ya no cumple sus requisitos.\n  `errors[].field` es `modules.N`, con `N` la posición en `modules` de la original.\n- `run.risk_not_confirmed`: hay un módulo de riesgo medio o alto y `confirm_risk` no es\n  `true`. `errors[].field` es `confirm_risk`.\n\n- `429`: `rate_limit.exceeded`: más de 100 peticiones por minuto (RNF-09).\n- `503`: `service.unavailable`: una dependencia no responde.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"confirm_risk\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "202 Vuelve a probar la ejecución 2",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/projects/{{project_id}}/runs/{{run_id}}/rerun",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "projects",
+                    "{{project_id}}",
+                    "runs",
+                    "{{run_id}}",
+                    "rerun"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"confirm_risk\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "202 Vuelve a probar la ejecución 2",
+              "code": 202,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"0192e3a0-7777-7000-8000-000000000004\",\n  \"number\": 4,\n  \"status\": \"queued\",\n  \"end_reason\": null,\n  \"modules\": [\n    \"authentication\",\n    \"configuration\",\n    \"object_access\",\n    \"function_access\"\n  ],\n  \"limits\": {\n    \"requests_per_second\": 5,\n    \"concurrency\": 2,\n    \"max_requests\": 5000,\n    \"max_duration_minutes\": 30\n  },\n  \"risk_confirmed\": false,\n  \"contract_version\": {\n    \"id\": \"0192e3a0-3333-7000-8000-000000000002\",\n    \"number\": 2,\n    \"source\": \"url\",\n    \"openapi_version\": \"3.0.3\",\n    \"operation_count\": 18,\n    \"imported_at\": \"2026-11-03T10:05:00Z\"\n  },\n  \"source_run_id\": \"0192e3a0-7777-7000-8000-000000000002\",\n  \"progress\": {\n    \"status\": \"queued\",\n    \"current_module\": null,\n    \"requests_sent\": 0,\n    \"cells_planned\": 0,\n    \"cells_evaluated\": 0,\n    \"percent\": 0,\n    \"findings_by_severity\": {\n      \"critical\": 0,\n      \"high\": 0,\n      \"medium\": 0,\n      \"low\": 0,\n      \"info\": 0,\n      \"total\": 0\n    },\n    \"updated_at\": \"2026-11-17T12:00:00Z\"\n  },\n  \"created_resources\": {\n    \"pending\": 0,\n    \"deleted\": 0,\n    \"failed\": 0\n  },\n  \"cancel_requested_at\": null,\n  \"created_at\": \"2026-11-17T12:00:00Z\",\n  \"started_at\": null,\n  \"finished_at\": null\n}"
+            },
+            {
+              "name": "400 `request.malformed`: cuerpo ilegible o tipo de contenido incorrecto.",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/projects/{{project_id}}/runs/{{run_id}}/rerun",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "projects",
+                    "{{project_id}}",
+                    "runs",
+                    "{{run_id}}",
+                    "rerun"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"confirm_risk\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "400 `request.malformed`: cuerpo ilegible o tipo de contenido incorrecto.",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/problem+json"
+                }
+              ],
+              "body": "{\n  \"type\": \"urn:hindama:error:url.destination_not_allowed\",\n  \"title\": \"texto\",\n  \"status\": 1,\n  \"detail\": \"texto\",\n  \"code\": \"url.destination_not_allowed\",\n  \"request_id\": \"texto\",\n  \"errors\": [\n    {\n      \"field\": \"texto\",\n      \"code\": \"texto\",\n      \"message\": \"texto\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "401 `auth.required` o `auth.invalid_token`. Next.js debe renovar el token o cerrar la sesión.",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/projects/{{project_id}}/runs/{{run_id}}/rerun",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "projects",
+                    "{{project_id}}",
+                    "runs",
+                    "{{run_id}}",
+                    "rerun"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"confirm_risk\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "401 `auth.required` o `auth.invalid_token`. Next.js debe renovar el token o cerrar la sesión.",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/problem+json"
+                }
+              ],
+              "body": "{\n  \"type\": \"urn:hindama:error:url.destination_not_allowed\",\n  \"title\": \"texto\",\n  \"status\": 1,\n  \"detail\": \"texto\",\n  \"code\": \"url.destination_not_allowed\",\n  \"request_id\": \"texto\",\n  \"errors\": [\n    {\n      \"field\": \"texto\",\n      \"code\": \"texto\",\n      \"message\": \"texto\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "403 `role.forbidden`: el administrador no accede al contenido de los proyectos (RF-80).",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/projects/{{project_id}}/runs/{{run_id}}/rerun",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "projects",
+                    "{{project_id}}",
+                    "runs",
+                    "{{run_id}}",
+                    "rerun"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"confirm_risk\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "403 `role.forbidden`: el administrador no accede al contenido de los proyectos (RF-80).",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/problem+json"
+                }
+              ],
+              "body": "{\n  \"type\": \"urn:hindama:error:url.destination_not_allowed\",\n  \"title\": \"texto\",\n  \"status\": 1,\n  \"detail\": \"texto\",\n  \"code\": \"url.destination_not_allowed\",\n  \"request_id\": \"texto\",\n  \"errors\": [\n    {\n      \"field\": \"texto\",\n      \"code\": \"texto\",\n      \"message\": \"texto\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "404 `resource.not_found`: no existe o pertenece a otro analista; las dos respuestas son idénticas (RN-02, RNF-05).",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/projects/{{project_id}}/runs/{{run_id}}/rerun",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "projects",
+                    "{{project_id}}",
+                    "runs",
+                    "{{run_id}}",
+                    "rerun"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"confirm_risk\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "404 `resource.not_found`: no existe o pertenece a otro analista; las dos respuestas son idénticas (RN-02, RNF-05).",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/problem+json"
+                }
+              ],
+              "body": "{\n  \"type\": \"urn:hindama:error:url.destination_not_allowed\",\n  \"title\": \"texto\",\n  \"status\": 1,\n  \"detail\": \"texto\",\n  \"code\": \"url.destination_not_allowed\",\n  \"request_id\": \"texto\",\n  \"errors\": [\n    {\n      \"field\": \"texto\",\n      \"code\": \"texto\",\n      \"message\": \"texto\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "409 `project.not_verified` (RN-01) o `project.active_run` (RN-07).",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/projects/{{project_id}}/runs/{{run_id}}/rerun",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "projects",
+                    "{{project_id}}",
+                    "runs",
+                    "{{run_id}}",
+                    "rerun"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"confirm_risk\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "409 `project.not_verified` (RN-01) o `project.active_run` (RN-07).",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/problem+json"
+                }
+              ],
+              "body": "{\n  \"type\": \"urn:hindama:error:url.destination_not_allowed\",\n  \"title\": \"texto\",\n  \"status\": 1,\n  \"detail\": \"texto\",\n  \"code\": \"url.destination_not_allowed\",\n  \"request_id\": \"texto\",\n  \"errors\": [\n    {\n      \"field\": \"texto\",\n      \"code\": \"texto\",\n      \"message\": \"texto\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "422 - `validation.*`.\n- `run.module_unavailable`: un módulo de la ejecución original ya no cumple sus requisitos.\n  `errors[].field` es `modules.N`, con `N` la posición en `modules` de la original.\n- `run.risk_not_confirmed`: hay un módulo de riesgo medio o alto y `confirm_risk` no es\n  `true`. `errors[].field` es `confirm_risk`.",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/projects/{{project_id}}/runs/{{run_id}}/rerun",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "projects",
+                    "{{project_id}}",
+                    "runs",
+                    "{{run_id}}",
+                    "rerun"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"confirm_risk\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "422 - `validation.*`.\n- `run.module_unavailable`: un módulo de la ejecución original ya no cumple sus requisitos.\n  `errors[].field` es `modules.N`, con `N` la posición en `modules` de la original.\n- `run.risk_not_confirmed`: hay un módulo de riesgo medio o alto y `confirm_risk` no es\n  `true`. `errors[].field` es `confirm_risk`.",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/problem+json"
+                }
+              ],
+              "body": "{\n  \"type\": \"urn:hindama:error:url.destination_not_allowed\",\n  \"title\": \"texto\",\n  \"status\": 1,\n  \"detail\": \"texto\",\n  \"code\": \"url.destination_not_allowed\",\n  \"request_id\": \"texto\",\n  \"errors\": [\n    {\n      \"field\": \"texto\",\n      \"code\": \"texto\",\n      \"message\": \"texto\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "429 `rate_limit.exceeded`: más de 100 peticiones por minuto (RNF-09).",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/projects/{{project_id}}/runs/{{run_id}}/rerun",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "projects",
+                    "{{project_id}}",
+                    "runs",
+                    "{{run_id}}",
+                    "rerun"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"confirm_risk\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "429 `rate_limit.exceeded`: más de 100 peticiones por minuto (RNF-09).",
+              "code": 429,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/problem+json"
+                }
+              ],
+              "body": "{\n  \"type\": \"urn:hindama:error:url.destination_not_allowed\",\n  \"title\": \"texto\",\n  \"status\": 1,\n  \"detail\": \"texto\",\n  \"code\": \"url.destination_not_allowed\",\n  \"request_id\": \"texto\",\n  \"errors\": [\n    {\n      \"field\": \"texto\",\n      \"code\": \"texto\",\n      \"message\": \"texto\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "503 `service.unavailable`: una dependencia no responde.",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/projects/{{project_id}}/runs/{{run_id}}/rerun",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "projects",
+                    "{{project_id}}",
+                    "runs",
+                    "{{run_id}}",
+                    "rerun"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"confirm_risk\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
                 }
               },
               "status": "503 `service.unavailable`: una dependencia no responde.",

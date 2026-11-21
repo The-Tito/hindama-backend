@@ -1,6 +1,6 @@
-"""Schemas of `/runs` (components `RunCreate`, `RunLimitsInput`, `RunLimits`, `Run`, `RunProgress`,
-`CreatedResourceCount`, `RunPage`, `IdentityRef`, `Result`, `ResultPage`). `RunSummary` lives
-with the dashboard, which also uses it."""
+"""Schemas of `/runs` (components `RunCreate`, `RunRerun`, `RunLimitsInput`, `RunLimits`, `Run`,
+`RunProgress`, `CreatedResourceCount`, `RunPage`, `IdentityRef`, `Result`, `ResultPage`).
+`RunSummary` lives with the dashboard, which also uses it."""
 
 from datetime import datetime
 from typing import Annotated
@@ -50,6 +50,10 @@ class RunCreate(ContractModel):
         if len(set(value)) != len(value):
             raise ValueError("modules no admite repetidos")
         return value
+
+
+class RunRerun(ContractModel):
+    confirm_risk: bool = False
 
 
 class RunProgress(ContractModel):

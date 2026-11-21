@@ -1,4 +1,5 @@
-"""`/projects/{project_id}/runs` (CU-12 to CU-15; RF-44 to RF-47, RF-51, RF-52, RF-63, RF-64)."""
+"""`/projects/{project_id}/runs` (CU-12 to CU-15, CU-17; RF-44 to RF-47, RF-51, RF-52, RF-63, RF-64,
+RF-71)."""
 
 from typing import Annotated
 from uuid import UUID
@@ -36,6 +37,7 @@ from hindama.schemas.runs import (
     RunLimits,
     RunPage,
     RunProgress,
+    RunRerun,
 )
 from hindama.services import runs as service
 from hindama.services.projects import run_modules
@@ -160,6 +162,27 @@ async def create_run(
         limits=body.limits.model_dump(),
         confirm_risk=body.confirm_risk,
     )
+    response.headers["Location"] = f"/projects/{project_id}/runs/{view.run.id}"
+    return _run(view)
+
+
+@router.post(
+    "/projects/{project_id}/runs/{run_id}/rerun",
+    operation_id="rerunRun",
+    summary="Volver a probar",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def rerun_run(
+    project_id: UUID,
+    run_id: UUID,
+    body: RunRerun,
+    _: Analyst,
+    db: DbSession,
+    request: Request,
+    response: Response,
+) -> Run:
+    queue: RunQueue = request.app.state.run_queue
+    view = await service.rerun_run(db, queue, project_id, run_id, confirm_risk=body.confirm_risk)
     response.headers["Location"] = f"/projects/{project_id}/runs/{view.run.id}"
     return _run(view)
 
