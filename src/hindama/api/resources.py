@@ -1,18 +1,45 @@
-"""`/projects/{project_id}/resources` (CU-10; RF-37, RF-38)."""
+"""`/projects/{project_id}/resources` (CU-10; RF-36 to RF-38)."""
 
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Body, Depends, Query, Request, Response, status
+from pydantic import MISSING
 
 from hindama.api.dependencies import Analyst, DbSession
+from hindama.api.identities import Cipher
 from hindama.api.projects import MAX_PAGE
+from hindama.config import Settings
+from hindama.core.resource_discovery import ResourceDiscoverer
 from hindama.models import Resource as ResourceRow
 from hindama.schemas.common import SINGLE_LINE
-from hindama.schemas.resources import Resource, ResourceCreate, ResourcePage, ResourceUpdate
+from hindama.schemas.resources import (
+    DiscoveryIdentityResult,
+    Resource,
+    ResourceCreate,
+    ResourceDiscovery,
+    ResourceDiscoveryRequest,
+    ResourcePage,
+    ResourceUpdate,
+)
 from hindama.services import resources as service
 
 router = APIRouter(tags=["Resources"])
+
+
+def get_discoverer(request: Request) -> ResourceDiscoverer:
+    """Tests put one that may reach a local server in `app.state.resource_discoverer`."""
+    settings: Settings = request.app.state.settings
+    discoverer: ResourceDiscoverer | None = getattr(request.app.state, "resource_discoverer", None)
+    return discoverer or ResourceDiscoverer(
+        resolver=request.app.state.resolver,
+        own_addresses=settings.own_ip_addresses,
+        address_policy=getattr(request.app.state, "address_policy", None),
+    )
+
+
+Discoverer = Annotated[ResourceDiscoverer, Depends(get_discoverer)]
+ALL_IDENTITIES = ResourceDiscoveryRequest()
 
 
 def _resource(row: ResourceRow) -> Resource:
@@ -76,8 +103,44 @@ async def create_resource(
     return _resource(row)
 
 
+@router.post(
+    "/projects/{project_id}/resources/discovery",
+    operation_id="discoverResources",
+    summary="Descubrir recursos por identidad",
+)
+async def discover_resources(
+    project_id: UUID,
+    _: Analyst,
+    db: DbSession,
+    cipher: Cipher,
+    discoverer: Discoverer,
+    # Optional body, never JSON `null` (contract): absent means every identity.
+    body: Annotated[ResourceDiscoveryRequest, Body()] = ALL_IDENTITIES,
+) -> ResourceDiscovery:
+    given = body.identity_ids
+    result = await service.discover_resources(
+        db, cipher, discoverer, project_id, None if given is MISSING else given
+    )
+    return ResourceDiscovery(
+        created=[_resource(row) for row in result.created],
+        identities=[
+            DiscoveryIdentityResult(
+                identity_id=item.identity_id,
+                found=item.found,
+                created=item.created,
+                owned_by_other=item.owned_by_other,
+                failure=item.failure,
+            )
+            for item in result.identities
+        ],
+        requests_sent=result.requests_sent,
+        truncated=result.truncated,
+    )
+
+
+# `:uuid`: `/resources/discovery` must not reach these routes; another method there is a 405.
 @router.patch(
-    "/projects/{project_id}/resources/{resource_id}",
+    "/projects/{project_id}/resources/{resource_id:uuid}",
     operation_id="updateResource",
     summary="Editar o confirmar un recurso",
 )
@@ -89,7 +152,7 @@ async def update_resource(
 
 
 @router.delete(
-    "/projects/{project_id}/resources/{resource_id}",
+    "/projects/{project_id}/resources/{resource_id:uuid}",
     operation_id="deleteResource",
     summary="Eliminar un recurso",
     status_code=status.HTTP_204_NO_CONTENT,
