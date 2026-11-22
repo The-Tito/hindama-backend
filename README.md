@@ -74,6 +74,8 @@ tests/schemathesis/run.sh --max-examples 300  # más a fondo
 
 ### Entorno local con Docker Compose
 
+Para levantarlo junto con el frontend (Windows, HTTPS y `.env` generado), sigue [entorno local y conexiones](../hindama-docs/03-api/entorno-local.md).
+
 ```bash
 cp .env.example .env               # y cambia cada contraseña y la llave de credenciales
 docker compose up --build          # PostgreSQL 16 + API en http://localhost:8000
