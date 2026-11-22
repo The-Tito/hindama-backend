@@ -23,7 +23,7 @@ from hindama.core.identity_probe import (
     ProbeResult,
     login_fields,
 )
-from hindama.core.openapi_import import ContractError, read_document
+from hindama.core.openapi_import import ContractError, read_document, resolve_ref
 from hindama.models import Identity, Operation, Project
 from hindama.models.base import new_id
 from hindama.models.enums import AuthType, IdentityStatus, VerificationStatus
@@ -55,7 +55,6 @@ RESERVED_HEADERS = frozenset(
     }
 )
 DOCUMENT_TIMEOUT_SECONDS = 10.0
-MAX_REF_HOPS = 16
 
 WARNING_MESSAGES = {
     "identity.no_resources": (
@@ -350,19 +349,17 @@ def _join(base_url: str, path: str) -> str:
     return base_url.rstrip("/") + path
 
 
-def _resolve(document: Any, node: Any) -> Any:
-    """Follows internal `$ref`s of a stored schema, within the imported document."""
-    for _ in range(MAX_REF_HOPS):
-        if not (isinstance(node, dict) and isinstance(node.get("$ref"), str)):
-            return node
-        ref: str = node["$ref"]
-        if not ref.startswith("#/") or document is None:
-            return None
-        node = document
-        for raw in ref.removeprefix("#/").split("/"):
-            part = raw.replace("~1", "/").replace("~0", "~")
-            node = node.get(part) if isinstance(node, dict) else None
-    return None
+async def stored_document(session: AsyncSession, contract_id: UUID) -> Any:
+    """The imported document of a contract version as JSON values, to follow the `$ref`s of its
+    stored schemas; `None` if it cannot be read now."""
+    raw = await repository.contract_document(session, contract_id)
+    try:
+        async with asyncio.timeout(DOCUMENT_TIMEOUT_SECONDS):
+            _, document = await asyncio.to_thread(read_document, raw or b"")
+    # The document was valid when imported; if it cannot be read now, the caller does without it.
+    except (ContractError, TimeoutError):  # pragma: no cover - defensive
+        return None
+    return document
 
 
 async def login_request(
@@ -383,14 +380,8 @@ async def login_request(
     schema = request.get(media) if media is not None else None
     document = None
     if isinstance(schema, dict) and "$ref" in schema:
-        raw = await repository.contract_document(session, contract_id)
-        try:
-            async with asyncio.timeout(DOCUMENT_TIMEOUT_SECONDS):
-                _, document = await asyncio.to_thread(read_document, raw or b"")
-        # The document was valid when imported; if it cannot be read now, the usual names are tried.
-        except (ContractError, TimeoutError):  # pragma: no cover - defensive
-            document = None
-    resolved = _resolve(document, schema)
+        document = await stored_document(session, contract_id)  # without it, the usual names
+    resolved = resolve_ref(document, schema)
     properties = resolved.get("properties") if isinstance(resolved, dict) else None
     username, password = login_fields(properties if isinstance(properties, dict) else ())
     return LoginRequest(_join(project.base_url, operation.path), username, password)

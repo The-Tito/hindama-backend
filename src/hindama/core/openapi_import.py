@@ -200,6 +200,25 @@ def invalid(field: str | None, code: str, message: str) -> ContractError:
     return ContractError("contract.invalid", [Issue(field, code, message)])
 
 
+MAX_REF_HOPS = 16
+
+
+def resolve_ref(document: Any, node: Any) -> Any:
+    """Follows internal `$ref`s of a stored schema, within the imported document; `None` if one
+    cannot be followed."""
+    for _ in range(MAX_REF_HOPS):
+        if not (isinstance(node, dict) and isinstance(node.get("$ref"), str)):
+            return node
+        ref: str = node["$ref"]
+        if not ref.startswith("#/") or document is None:
+            return None
+        node = document
+        for raw in ref.removeprefix("#/").split("/"):
+            part = raw.replace("~1", "/").replace("~0", "~")
+            node = node.get(part) if isinstance(node, dict) else None
+    return None
+
+
 # ---------------------------------------------------------------- reading
 
 

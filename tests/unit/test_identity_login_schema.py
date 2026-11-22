@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from hindama.services.identities import _resolve
+from hindama.core.openapi_import import resolve_ref
 
 DOCUMENT = {
     "components": {
@@ -36,4 +36,4 @@ DOCUMENT = {
     ],
 )
 def test_resolve(schema: Any, document: Any, expected: Any) -> None:
-    assert _resolve(document, schema) == expected
+    assert resolve_ref(document, schema) == expected
