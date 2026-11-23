@@ -157,7 +157,7 @@ async def create_run(
         raise ServiceUnavailableError() from error
     await session.flush()
     await session.refresh(run)
-    # RF-81 (bitácora) is pending: until then, the log keeps the event.
+    # The router audits it (`run_launched`, RF-81).
     log.info(
         "run_created",
         project_id=str(project_id),
@@ -206,6 +206,7 @@ async def rerun_run(
 class Cancellation:
     view: RunView
     ended: bool  # the run ended here (it was queued): nobody else publishes its `end`
+    first: bool  # this request asked for it; a repeated cancel is not audited again (RF-81)
 
 
 async def cancel_run(
@@ -220,7 +221,8 @@ async def cancel_run(
             "La ejecución ya terminó",
             "Solo se puede cancelar una ejecución en cola o en curso.",
         )
-    if run.cancel_requested_at is None:  # repeating it answers the same (contract)
+    first = run.cancel_requested_at is None
+    if first:  # repeating it answers the same (contract)
         run.cancel_requested_at = func.now()
     queued = run.status == RunStatus.QUEUED
     if queued:
@@ -236,14 +238,13 @@ async def cancel_run(
         # A queued run is already over: if its job still runs, the scanner skips it.
     await session.flush()
     await session.refresh(run)
-    # RF-81 (bitácora) is pending: until then, the log keeps the event.
     log.info(
         "run_cancel_requested",
         project_id=str(project_id),
         run_id=str(run_id),
         status=run.status,
     )
-    return Cancellation(view=await _view(session, run), ended=queued)
+    return Cancellation(view=await _view(session, run), ended=queued, first=first)
 
 
 # ------------------------------------------------------------------ queries

@@ -99,6 +99,7 @@ def build_worker(
             cipher=settings.credential_cipher(),
             http_client=http_client,
             events=events,
+            hasher=settings.host_hasher(),
         )
 
     async def shutdown(ctx: ScannerContext) -> None:

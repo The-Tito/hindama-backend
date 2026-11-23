@@ -8,7 +8,7 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, Header, Query, Request, Response, status
 from pydantic import AfterValidator
 
-from hindama.api.dependencies import DATABASE_UNAVAILABLE, Analyst, DbSession
+from hindama.api.dependencies import DATABASE_UNAVAILABLE, Analyst, Audit, DbSession
 from hindama.api.projects import MAX_PAGE, run_summary, severity_count
 from hindama.api.run_stream import STREAM_HEADERS, EventStreamResponse, first_event_id, stream
 from hindama.core.errors import NotFoundError
@@ -18,6 +18,7 @@ from hindama.db.session import set_rls_context
 from hindama.models import Identity, Operation
 from hindama.models import Result as ResultRow
 from hindama.models.enums import (
+    AuditAction,
     CreatedResourceStatus,
     EndReason,
     HttpMethod,
@@ -152,6 +153,7 @@ async def create_run(
     db: DbSession,
     request: Request,
     response: Response,
+    audit: Audit,
 ) -> Run:
     queue: RunQueue = request.app.state.run_queue
     view = await service.create_run(
@@ -162,8 +164,22 @@ async def create_run(
         limits=body.limits.model_dump(),
         confirm_risk=body.confirm_risk,
     )
+    await _audit_launch(audit, view)
     response.headers["Location"] = f"/projects/{project_id}/runs/{view.run.id}"
     return _run(view)
+
+
+async def _audit_launch(audit: Audit, view: RunView) -> None:
+    """RF-81: modules and limits of the run, with the HMAC of the project's host."""
+    run = view.run
+    await audit.record_on_project(
+        AuditAction.RUN_LAUNCHED,
+        run.project_id,
+        run_id=run.id,
+        source_run_id=run.source_run_id,
+        modules=list(run.config["modules"]),
+        limits=dict(run.config["limits"]),
+    )
 
 
 @router.post(
@@ -180,9 +196,11 @@ async def rerun_run(
     db: DbSession,
     request: Request,
     response: Response,
+    audit: Audit,
 ) -> Run:
     queue: RunQueue = request.app.state.run_queue
     view = await service.rerun_run(db, queue, project_id, run_id, confirm_risk=body.confirm_risk)
+    await _audit_launch(audit, view)
     response.headers["Location"] = f"/projects/{project_id}/runs/{view.run.id}"
     return _run(view)
 
@@ -209,9 +227,12 @@ async def cancel_run(
     db: DbSession,
     request: Request,
     background: BackgroundTasks,
+    audit: Audit,
 ) -> Run:
     queue: RunQueue = request.app.state.run_queue
     cancellation = await service.cancel_run(db, queue, project_id, run_id)
+    if cancellation.first:
+        await audit.record_on_project(AuditAction.RUN_CANCELLED, project_id, run_id=run_id)
     if cancellation.ended:
         # A queued run ended here: tell its streams, once the transaction is committed.
         events: RunEvents = request.app.state.run_events

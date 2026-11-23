@@ -94,7 +94,7 @@ async def verify(
         project.verified_host = project.host
         project.verified_at = func.now()
         failure = None
-        # RF-81 (bitácora) is pending: until then, the log keeps the event.
+        # The router audits it (`project_verified`, RF-81).
         log.info("project_verified", project_id=str(project.id), method=method.value)
     else:
         project.verification_status = VerificationStatus.PENDING

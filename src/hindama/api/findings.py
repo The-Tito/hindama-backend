@@ -6,10 +6,11 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Response, status
 from pydantic import AfterValidator
 
-from hindama.api.dependencies import Analyst, DbSession
+from hindama.api.dependencies import Analyst, Audit, DbSession
 from hindama.api.projects import MAX_PAGE
 from hindama.api.runs import identity_ref, operation_ref, unique
 from hindama.models.enums import (
+    AuditAction,
     DismissalReason,
     FindingEventReason,
     FindingStatus,
@@ -219,7 +220,12 @@ async def list_finding_occurrences(
     summary="Aceptar el riesgo o marcar como falso positivo",
 )
 async def dismiss_finding(
-    project_id: UUID, finding_id: UUID, body: DismissalCreate, user: Analyst, db: DbSession
+    project_id: UUID,
+    finding_id: UUID,
+    body: DismissalCreate,
+    user: Analyst,
+    db: DbSession,
+    audit: Audit,
 ) -> Finding:
     view = await service.dismiss(
         db,
@@ -228,6 +234,13 @@ async def dismiss_finding(
         user,
         reason=body.reason,
         justification=body.justification,
+    )
+    # RN-09: the reason, never the justification (RF-83).
+    await audit.record(
+        AuditAction.FINDING_DISMISSED,
+        project_id=project_id,
+        finding_id=finding_id,
+        dismissal_reason=body.reason,
     )
     return _finding(view)
 
@@ -239,7 +252,10 @@ async def dismiss_finding(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def revert_dismissal(
-    project_id: UUID, finding_id: UUID, user: Analyst, db: DbSession
+    project_id: UUID, finding_id: UUID, user: Analyst, db: DbSession, audit: Audit
 ) -> Response:
     await service.revert_dismissal(db, project_id, finding_id, user)
+    await audit.record(
+        AuditAction.FINDING_DISMISSAL_REVERTED, project_id=project_id, finding_id=finding_id
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

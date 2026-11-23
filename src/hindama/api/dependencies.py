@@ -8,15 +8,27 @@ from fastapi import Depends, Request
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from hindama.core.audit import HostHasher, client_ip
 from hindama.core.auth import CurrentUser, Principal, Role
 from hindama.core.errors import ForbiddenError, ServiceUnavailableError
 from hindama.db.session import set_rls_context
 from hindama.services.accounts import resolve_user
+from hindama.services.audit import Auditor
 
 log = structlog.get_logger(__name__)
 
 # Raised when the connection cannot be opened: the database is down, starting or unreachable.
 DATABASE_UNAVAILABLE = (OSError, TimeoutError, OperationalError, InterfaceError)
+
+CLIENT_IP_HEADER = "X-Hindama-Client-IP"
+
+
+def source_ip(request: Request) -> str | None:
+    """The browser's IP for the audit log (RF-82), as the frontend reported it, if valid.
+
+    Only the frontend reaches the API (SG-FE, behind Caddy), so the browser cannot send it
+    directly; it is recorded, never used to authorize (convenciones.md, section 3)."""
+    return client_ip(request.headers.get(CLIENT_IP_HEADER))
 
 
 def get_engine(request: Request) -> AsyncEngine:
@@ -35,7 +47,7 @@ async def open_db_session(request: Request) -> AsyncIterator[AsyncSession]:
     async with session_factory() as session, session.begin():
         try:
             await set_rls_context(session, cognito_sub=principal.cognito_sub, role=principal.role)
-            user = await resolve_user(session, principal)
+            user = await resolve_user(session, principal, source_ip(request))
             await set_rls_context(
                 session, cognito_sub=user.cognito_sub, role=user.role, user_id=user.id
             )
@@ -82,3 +94,25 @@ def require_admin(user: AnyUser) -> CurrentUser:
 
 Analyst = Annotated[CurrentUser, Depends(require_analyst)]
 Admin = Annotated[CurrentUser, Depends(require_admin)]
+
+
+def get_hasher(request: Request) -> HostHasher:
+    hasher: HostHasher = request.app.state.host_hasher
+    return hasher
+
+
+Hasher = Annotated[HostHasher, Depends(get_hasher)]
+
+
+def get_auditor(request: Request, db: DbSession, user: AnyUser, hasher: Hasher) -> Auditor:
+    """The audit log of this request (RF-81, RF-82): its transaction, user and browser IP."""
+    return Auditor(
+        session=db,
+        session_factory=request.app.state.session_factory,
+        hasher=hasher,
+        user_id=user.id,
+        source_ip=source_ip(request),
+    )
+
+
+Audit = Annotated[Auditor, Depends(get_auditor)]

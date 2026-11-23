@@ -135,6 +135,8 @@ def create_app(
     )
     # AES-256-GCM keys of the identities' credentials (ADR-007): read once, kept only in memory.
     app.state.credential_cipher = settings.credential_cipher()
+    # HMAC keys of the audit log (ADR-015): the log keeps a host's HMAC, never the host (RF-83).
+    app.state.host_hasher = settings.host_hasher()
     app.state.identity_prober = identity_prober
     app.state.run_queue = run_queue
     app.state.run_events = run_events

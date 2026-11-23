@@ -295,8 +295,8 @@ async def update_project(
     return await dashboard(session, project.id, momentary)
 
 
-async def delete_project(session: AsyncSession, project_id: UUID, confirmation: str) -> None:
-    """RF-14, CU-06 A2. The written name must match exactly."""
+async def delete_project(session: AsyncSession, project_id: UUID, confirmation: str) -> str:
+    """RF-14, CU-06 A2. The written name must match exactly. Returns the host, for the audit log."""
     project = await repository.get(session, project_id)
     if project is None:
         raise NotFoundError()
@@ -313,4 +313,6 @@ async def delete_project(session: AsyncSession, project_id: UUID, confirmation: 
             "Hay una ejecución activa",
             "Cancela la ejecución en curso antes de eliminar el proyecto.",
         )
+    host = project.host
     await repository.delete_project(session, project_id)
+    return host

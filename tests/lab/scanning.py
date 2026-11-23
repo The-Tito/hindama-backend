@@ -20,6 +20,7 @@ from hindama.db.session import create_session_factory
 from hindama.models import Finding, Result, Run
 from hindama.scanner.execution import Scanner, execute
 from hindama.scanner.requester import SCAN_LIMITS
+from tests.conftest import TEST_HASHER
 from tests.events import MemoryRunEvents
 from tests.integration.conftest import Analyst
 from tests.lab.app import ANA_PASSWORD, BETO_TOKEN, RAIZ_TOKEN
@@ -46,6 +47,7 @@ def lab_scanner(
         cipher=cipher,
         http_client=http_client,
         events=events or MemoryRunEvents(),
+        hasher=TEST_HASHER,
     )
 
 

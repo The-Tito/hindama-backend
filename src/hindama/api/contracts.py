@@ -5,13 +5,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, File, Form, Query, Response, UploadFile, status
 
-from hindama.api.dependencies import Analyst, DbSession
+from hindama.api.dependencies import Analyst, Audit, DbSession
 from hindama.api.projects import MAX_PAGE, Destinations
 from hindama.core.openapi_import import is_login_candidate
 from hindama.models import Operation as OperationRow
 from hindama.models import OperationVersion
 from hindama.models.base import MAX_CONTRACT_BYTES
-from hindama.models.enums import HttpMethod, Policy
+from hindama.models.enums import BlockStage, HttpMethod, Policy
 from hindama.schemas.common import Warning
 from hindama.schemas.contracts import (
     ContractChanges,
@@ -113,6 +113,7 @@ async def import_contract(
     db: DbSession,
     response: Response,
     destinations: Destinations,
+    audit: Audit,
     file: Annotated[UploadFile | None, File()] = None,
     url: Annotated[str | None, Form(max_length=2048)] = None,
 ) -> ContractVersion:
@@ -121,9 +122,10 @@ async def import_contract(
         # The middleware already capped the body; one byte more tells an oversized file apart.
         content = await file.read(MAX_CONTRACT_BYTES + 1)
         upload = Upload(content=content, file_name=file.filename)
-    view, created = await service.import_contract(
-        db, project_id, user.id, upload=upload, url=url, url_policy=destinations
-    )
+    async with audit.blocks(BlockStage.CONTRACT_IMPORT, project_id):
+        view, created = await service.import_contract(
+            db, project_id, user.id, upload=upload, url=url, url_policy=destinations
+        )
     if created:
         response.headers["Location"] = f"/projects/{project_id}/contracts/{view.version.id}"
     else:

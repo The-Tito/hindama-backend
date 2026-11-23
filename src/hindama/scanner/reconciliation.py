@@ -143,7 +143,7 @@ def _fail(run: Run, reason: EndReason) -> None:
 
 async def _ended(events: RunEvents, run: Run, reason: EndReason) -> None:
     await events.publish(run.id, RunEvent.END)  # after the commit: the stream reads it final
-    # RF-81 (bitácora) is pending: until then, the log keeps the event.
+    # Not in the audit catalog (RF-81): the process log keeps it.
     log.warning(
         "run_failed_by_reconciliation",
         project_id=str(run.project_id),

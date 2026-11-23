@@ -26,20 +26,23 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from hindama.core.ownership import CheckResult, Outcome
 from hindama.core.run_events import RedisRunEvents, RunEvent, Subscription
 from hindama.core.run_queue import SaqRunQueue
+from hindama.core.safe_http import SafeHttpClient
 from hindama.models import Project as ProjectRow
 from hindama.models import Result, Run
 from hindama.models.enums import VerificationMethod
 from hindama.scanner import execution
 from hindama.scanner.config import ScannerSettings
 from hindama.scanner.execution import Scanner, execute
+from hindama.scanner.requester import SCAN_LIMITS
 from hindama.scanner.worker import build_worker
-from tests.conftest import TEST_AUDIT_KEY, TEST_CREDENTIAL_KEY
+from tests.audit import actions, audit_entries
+from tests.conftest import TEST_AUDIT_KEY, TEST_CREDENTIAL_KEY, TEST_HASHER
 from tests.events import MemoryRunEvents
 from tests.integration.conftest import SCANNER_URL, Analyst
 from tests.integration.test_runs import Project, finish, new_project, owner_session, sse_events
 from tests.lab.scanning import lab_project, lab_scanner
 from tests.ownership import ScriptedChecker
-from tests.servers import LocalServer
+from tests.servers import LocalServer, ScriptedResolver
 
 REDIS_URL = os.environ.get("HINDAMA_TEST_REDIS_URL")
 
@@ -154,6 +157,55 @@ async def test_a_lost_verification_cancels_the_run(
     run = await stored(owner, run_id)
     assert (run.status, run.end_reason) == ("cancelled", "verification_invalid")  # CU-12 E2
     assert await verification_status(owner, project) == "pending"
+    # RF-81: audited with the change, on behalf of the owner, with the host's HMAC.
+    (lost,) = [
+        e
+        for e in await audit_entries(owner, project_id=project.id)
+        if e.action == "project_verification_lost"
+    ]
+    me = (await project.analyst.request("GET", "/me")).json()
+    assert str(lost.user_id) == me["id"]
+    assert lost.source_ip is None  # the scanner has no browser
+    assert lost.details == {"run_id": str(run_id), "verification_method": "dns"}
+    assert bytes(lost.host_hmac or b"") == TEST_HASHER.digest("api.ejemplo.com").value
+
+
+async def test_blocked_destinations_of_a_run_are_audited_once(
+    project: Project, scanner: Scanner, owner: AsyncEngine
+) -> None:
+    """RF-50, RF-81: the project's host now resolves to a private address. Every request is
+    blocked; the log gets one entry per reason, not one per request."""
+
+    def private_client(host: str) -> SafeHttpClient:
+        return SafeHttpClient(host, resolver=ScriptedResolver(["10.0.0.9"]), limits=SCAN_LIMITS)
+
+    run_id = await launch(project)
+
+    await execute(dataclasses.replace(scanner, http_client=private_client), run_id, Touches())
+
+    blocked = [
+        e
+        for e in await audit_entries(owner, project_id=project.id)
+        if e.action == "destination_blocked"
+    ]
+    assert [e.details for e in blocked] == [
+        {"stage": "run", "block_reason": "address_not_allowed", "run_id": str(run_id)}
+    ]
+    assert bytes(blocked[0].host_hmac or b"") == TEST_HASHER.digest("api.ejemplo.com").value
+
+
+async def test_a_run_without_blocks_audits_nothing_from_the_scanner(
+    project: Project, scanner: Scanner, owner: AsyncEngine
+) -> None:
+    run_id = await launch(project)
+
+    await execute(scanner, run_id, Touches())
+
+    assert set(actions(await audit_entries(owner, project_id=project.id))) == {
+        "project_created",
+        "project_verified",
+        "run_launched",
+    }
 
 
 async def test_an_unreachable_host_fails_the_run_but_keeps_the_verification(

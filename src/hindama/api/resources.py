@@ -6,12 +6,13 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Depends, Query, Request, Response, status
 from pydantic import MISSING
 
-from hindama.api.dependencies import Analyst, DbSession
+from hindama.api.dependencies import Analyst, Audit, DbSession
 from hindama.api.identities import Cipher
 from hindama.api.projects import MAX_PAGE
 from hindama.config import Settings
 from hindama.core.resource_discovery import ResourceDiscoverer
 from hindama.models import Resource as ResourceRow
+from hindama.models.enums import BlockStage
 from hindama.schemas.common import SINGLE_LINE
 from hindama.schemas.resources import (
     DiscoveryIdentityResult,
@@ -114,13 +115,15 @@ async def discover_resources(
     db: DbSession,
     cipher: Cipher,
     discoverer: Discoverer,
+    audit: Audit,
     # Optional body, never JSON `null` (contract): absent means every identity.
     body: Annotated[ResourceDiscoveryRequest, Body()] = ALL_IDENTITIES,
 ) -> ResourceDiscovery:
     given = body.identity_ids
-    result = await service.discover_resources(
-        db, cipher, discoverer, project_id, None if given is MISSING else given
-    )
+    async with audit.blocks(BlockStage.RESOURCE_DISCOVERY, project_id):
+        result = await service.discover_resources(
+            db, cipher, discoverer, project_id, None if given is MISSING else given
+        )
     return ResourceDiscovery(
         created=[_resource(row) for row in result.created],
         identities=[
