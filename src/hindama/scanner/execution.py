@@ -76,6 +76,12 @@ VISIBILITY_POLL_SECONDS = 0.1
 
 # The code is no longer where it was, or the host now points somewhere forbidden: the ownership
 # is not valid any more (RF-20, CU-12 E2). A connection error proves nothing about ownership.
+# RF-20: one DNS or HTTP hiccup must not take the verification away. A failed check is repeated
+# with a short pause, and only the last answer counts. A host that really dropped the code still
+# loses it, a few seconds later.
+RECHECK_ATTEMPTS = 3
+RECHECK_PAUSE_SECONDS = 2.0
+
 _OWNERSHIP_LOST = {
     Outcome.FILE_NOT_FOUND,
     Outcome.CONTENT_MISMATCH,
@@ -112,6 +118,7 @@ class Scanner:
     http_client: Callable[[str], SafeHttpClient]
     events: RunEvents
     hasher: HostHasher  # the audit log keeps a host's HMAC, never the host (ADR-015)
+    recheck_pause_seconds: float = RECHECK_PAUSE_SECONDS  # tests use 0: no fixed waits
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,12 +285,20 @@ async def _still_verified(scanner: Scanner, run: Run) -> bool:
     ):
         return False
     method = VerificationMethod(project.verification_method)
-    result = await scanner.ownership_checker.check(
-        method,
-        base_url=project.base_url,
-        host=project.host,
-        code=published_code(project.verification_code),
-    )
+    code = published_code(project.verification_code)
+    for attempt in range(1, RECHECK_ATTEMPTS + 1):
+        result = await scanner.ownership_checker.check(
+            method, base_url=project.base_url, host=project.host, code=code
+        )
+        if result.outcome == Outcome.VERIFIED or attempt == RECHECK_ATTEMPTS:
+            break
+        log.info(
+            "ownership_recheck_failed",
+            project_id=str(project_id),
+            attempt=attempt,
+            outcome=result.outcome.value,
+        )
+        await asyncio.sleep(scanner.recheck_pause_seconds)
     if result.outcome == Outcome.VERIFIED:
         return True
     if result.outcome not in _OWNERSHIP_LOST:

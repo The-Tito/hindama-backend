@@ -11,6 +11,7 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 
 ### Cambiado
 
+- La verificación al iniciar una ejecución se repite hasta 3 veces, con 2 s de pausa, antes de quitarle la verificación al proyecto: un fallo pasajero del DNS ya no la hace perder (RF-20).
 - Contrato 0.8.0: los módulos que el motor todavía no tiene (`property_access`, `resource_consumption`, `sql_injection`) informan `not_implemented` en `modules[].missing` y lanzarlos responde `run.module_unavailable`, en lugar de planear 0 celdas en silencio (RF-45).
 
 ## [0.1.0] — 2026-11-23
