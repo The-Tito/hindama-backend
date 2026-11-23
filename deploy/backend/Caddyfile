@@ -1,0 +1,34 @@
+# TLS of the backend (architecture 2.3; ADR-005). Only the frontend reaches 8443 (SG-FE), through
+# the private IP, with the name `backend.internal` (an /etc/hosts entry on the frontend's EC2).
+# The certificate comes from Caddy's own CA: the frontend trusts its root, which lives in the
+# `caddy-data` volume (/data/caddy/pki/authorities/local/root.crt) and is published in SSM.
+{
+	admin off
+	auto_https disable_redirects
+	skip_install_trust
+	# Only TCP 8443 is open: no HTTP/3 (UDP), so no `alt-svc` pointing at it.
+	servers {
+		protocols h1 h2
+	}
+	# Leaf certificates last 12 hours and renew by themselves; the root, 10 years.
+	pki {
+		ca local {
+			name "Hindama backend"
+		}
+	}
+}
+
+https://backend.internal:8443 {
+	tls internal
+
+	# The API writes its own access log, without query strings (RN-11): Caddy logs nothing.
+	header {
+		-Server
+		-Via
+	}
+
+	reverse_proxy api:8000 {
+		# Server-sent events of a run's progress (RF-51): forward every byte at once.
+		flush_interval -1
+	}
+}
