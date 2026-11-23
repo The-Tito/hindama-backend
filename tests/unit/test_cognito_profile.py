@@ -145,3 +145,50 @@ async def test_delete_with_unreachable_cognito_is_service_unavailable(
         await client.delete(token)
 
     assert token.split(".")[1] not in capsys.readouterr().out
+
+
+# ------------------------------------------------------------------ second factor (RF-85, RF-86)
+
+
+@pytest.mark.parametrize(
+    ("settings", "enabled"),
+    [
+        (None, False),  # absent: no second factor
+        ([], False),
+        (["SMS_MFA"], False),
+        (["SOFTWARE_TOKEN_MFA"], True),
+        (["SMS_MFA", "SOFTWARE_TOKEN_MFA"], True),
+    ],
+)
+async def test_mfa_enabled_means_the_totp_is_active(
+    user_pool: FakeUserPool, settings: list[str] | None, enabled: bool
+) -> None:
+    body: dict[str, object] = {
+        "UserAttributes": [
+            {"Name": "name", "Value": "Ana"},
+            {"Name": "email", "Value": "ana@ejemplo.com"},
+        ]
+    }
+    if settings is not None:
+        body["UserMFASettingList"] = settings
+    user_pool.get_user_response = (200, body)
+
+    profile = await user_pool.profile_client().get(user_pool.token())
+
+    assert profile.mfa_enabled is enabled
+
+
+async def test_a_malformed_mfa_list_is_service_unavailable(user_pool: FakeUserPool) -> None:
+    user_pool.get_user_response = (
+        200,
+        {
+            "UserAttributes": [
+                {"Name": "name", "Value": "Ana"},
+                {"Name": "email", "Value": "ana@ejemplo.com"},
+            ],
+            "UserMFASettingList": "SOFTWARE_TOKEN_MFA",
+        },
+    )
+
+    with pytest.raises(ServiceUnavailableError):
+        await user_pool.profile_client().get(user_pool.token())

@@ -37,6 +37,7 @@ Infraestructura de Hindama creada paso a paso, sin Terraform ([ADR-011](../../hi
         "Action": [
           "cognito-idp:CreateUserPool",
           "cognito-idp:CreateGroup",
+          "cognito-idp:SetUserPoolMfaConfig",
           "cognito-idp:CreateUserPoolClient",
           "cognito-idp:ListUserPools",
           "cognito-idp:DescribeUserPool",
@@ -73,9 +74,9 @@ Un User Pool por entorno: `hindama-dev` para desarrollo y `hindama-prod` para la
 | Verificación | Código de 6 dígitos al correo antes del primer inicio de sesión | RF-02. Cambiar el correo exige verificar el nuevo. |
 | Contraseñas | Mínimo 12, con mayúsculas, minúsculas, números y símbolos; no repetir las últimas 5; contraseña temporal válida 1 día | RF-03. |
 | Recuperación | Solo por correo verificado | RF-05. |
-| MFA | Desactivado por ahora | Se activa con F-15 (RF-85 a RF-87). |
+| MFA | **TOTP opcional**, sin SMS (`deploy/cognito/create-user-pool.sh` lo activa después de crear el pool) | RF-85 a RF-87, ADR-018. Quien lo activa lo usa en cada inicio de sesión. La API exige el TOTP activo al administrador (403 `auth.mfa_required`). En `hindama-dev` se activó el 2026-11-23 con `set-user-pool-mfa-config`. |
 | Correo | El de Cognito (`COGNITO_DEFAULT`) | Límite de 50 correos al día: suficiente para desarrollo y la demostración. Si no alcanza, configurar SES. |
-| Grupo `administradores` | Precedencia 0 | Rol de administrador (RN-04, RF-09). Solo se asigna desde la consola (sección 2.5). |
+| Grupo `administradores` | Precedencia 0 | Rol de administrador (RN-04, RF-09). Solo se asigna desde la consola (sección 2.5), y solo a una cuenta que **ya tiene el TOTP activo**: así nadie lo activa por primera vez con la sola contraseña de un administrador (ADR-018). |
 | Cliente `hindama-web` | **Confidencial** (con secreto) | Next.js llama a Cognito desde su servidor (ADR-005). |
 | Flujos del cliente | `ALLOW_USER_PASSWORD_AUTH`, `ALLOW_REFRESH_TOKEN_AUTH` | Formulario propio; sin interfaz alojada ni OAuth. |
 | Errores de existencia de usuario | Ocultos (`PreventUserExistenceErrors = ENABLED`) | Mensaje genérico que no revela si el correo existe (RF-06). |
@@ -99,7 +100,7 @@ El script:
 
 1. Muestra la cuenta, la identidad y la región, y pide escribir el nombre del pool para confirmar.
 2. Se detiene si ya existe un pool con ese nombre, para no crear duplicados.
-3. Crea el pool, el grupo `administradores` y el cliente `hindama-web`.
+3. Crea el pool (con TOTP opcional), el grupo `administradores` y el cliente `hindama-web`.
 4. Guarda el secreto del cliente directo en SSM, sin imprimirlo ni pasarlo como argumento.
 5. Imprime las tres variables para el `.env` del backend. Ninguna es secreta.
 

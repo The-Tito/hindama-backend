@@ -55,6 +55,13 @@ pool_id="$(aws_cli cognito-idp create-user-pool \
   --query UserPool.Id)"
 echo "User Pool creado: ${pool_id}"
 
+# TOTP optional, without SMS (RF-85, ADR-018). CreateUserPool cannot enable it: it would ask for SMS.
+aws_cli cognito-idp set-user-pool-mfa-config \
+  --user-pool-id "${pool_id}" \
+  --software-token-mfa-configuration Enabled=true \
+  --mfa-configuration OPTIONAL >/dev/null
+echo "Segundo factor: TOTP opcional"
+
 aws_cli cognito-idp create-group \
   --user-pool-id "${pool_id}" \
   --group-name "${ADMIN_GROUP}" \
