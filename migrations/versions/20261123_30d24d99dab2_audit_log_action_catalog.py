@@ -45,4 +45,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("ck_audit_log_action", "audit_log", type_="check")
+    op.drop_constraint("action", "audit_log", type_="check")
