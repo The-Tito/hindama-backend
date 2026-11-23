@@ -69,6 +69,11 @@ class Requester:
     def sent(self) -> int:
         return self._limiter.sent
 
+    @property
+    def remaining(self) -> int:
+        """Requests left in the run's budget (RF-47)."""
+        return self._limiter.remaining
+
     async def send(
         self,
         actor: Actor,

@@ -33,6 +33,7 @@ from hindama.core.run_queue import QueueUnavailableError, RunQueue
 from hindama.models import Run
 from hindama.models.enums import DailyMetricName, EndReason, RunStatus
 from hindama.repositories import metrics
+from hindama.scanner.created import give_up_pending
 from hindama.scanner.resolution import resolve_not_detected
 
 log = structlog.get_logger(__name__)
@@ -141,6 +142,7 @@ async def _fail(session: AsyncSession, run: Run, reason: EndReason) -> None:
     run.finished_at = func.now()
     run.current_module = None
     await metrics.increment_daily(session, DailyMetricName.RUNS_FAILED)  # RF-78
+    await give_up_pending(session, run.id, "run_interrupted")  # RN-06, CU-23 E1
 
 
 async def _ended(events: RunEvents, run: Run, reason: EndReason) -> None:

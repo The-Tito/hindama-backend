@@ -52,12 +52,7 @@ ALL_MISSING = {
         "no_admin_identity",
         "policy_unconfirmed",
     ],
-    "property_access": [
-        "project_not_verified",
-        "no_contract",
-        "insufficient_identities",
-        "not_implemented",
-    ],
+    "property_access": ["project_not_verified", "no_contract", "insufficient_identities"],
     "resource_consumption": ["project_not_verified", "no_contract"],
     "sql_injection": ["project_not_verified", "no_contract"],
 }
@@ -575,7 +570,7 @@ async def test_dashboard_with_activity(ana: Analyst, owner: AsyncEngine) -> None
         "configuration": [],
         "object_access": [],
         "function_access": ["policy_unconfirmed"],  # its admin-only operation was retired
-        "property_access": ["not_implemented"],  # RF-45: the scanner does not have them yet
+        "property_access": [],
         "resource_consumption": [],
         "sql_injection": [],
     }
