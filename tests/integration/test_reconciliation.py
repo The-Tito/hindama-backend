@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from hindama.core.run_events import RunEvent
 from hindama.core.run_queue import job_key
 from hindama.db.session import create_session_factory
-from hindama.models import AuditLogEntry, Result, Run
+from hindama.models import AuditLogEntry, CreatedResource, Operation, Result, Run
 from hindama.models.enums import DailyMetricName
 from hindama.scanner import reconciliation
 from hindama.scanner.config import ScannerSettings
@@ -98,6 +98,41 @@ async def test_a_running_run_without_heartbeat_fails(
     assert (await project.launch()).status_code == 202
     body = (await project.analyst.request("GET", f"{project.runs}/{run_id}")).json()
     assert (body["status"], body["end_reason"]) == ("failed", "heartbeat_expired")
+
+
+async def test_what_a_dead_run_created_is_reported_not_deleted(
+    ana: Analyst,
+    owner: AsyncEngine,
+    scanner_engine: AsyncEngine,
+    run_queue: MemoryRunQueue,
+    run_events: MemoryRunEvents,
+) -> None:
+    project = await new_project(ana, contract=True)
+    run_id = await launch(project)
+    await start(owner, run_id=str(run_id))
+    async with await owner_session(owner) as db, db.begin():
+        operation_id = await db.scalar(
+            select(Operation.id).where(Operation.project_id == UUID(project.id)).limit(1)
+        )
+        db.add(
+            CreatedResource(
+                project_id=UUID(project.id),
+                run_id=run_id,
+                operation_id=operation_id,
+                location="/notes/n-1",
+            )
+        )
+    await age(owner, run_id, heartbeat_at=61)
+
+    await run_reconciliation(scanner_engine, run_queue, run_events)
+
+    async with await owner_session(owner) as db:
+        row = await db.scalar(select(CreatedResource).where(CreatedResource.run_id == run_id))
+    assert row is not None
+    # RN-06, CU-23 E1: the analyst sees it in the run and deletes it by hand.
+    assert (row.status, row.last_error) == ("failed", "run_interrupted")
+    body = (await project.analyst.request("GET", f"{project.runs}/{run_id}")).json()
+    assert body["created_resources"] == {"pending": 0, "deleted": 0, "failed": 1}
 
 
 async def test_a_running_run_that_beats_is_left_alone(

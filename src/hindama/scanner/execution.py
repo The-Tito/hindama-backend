@@ -53,6 +53,7 @@ from hindama.repositories import audit as audit_log
 from hindama.repositories import metrics
 from hindama.repositories.audit import NewEntry
 from hindama.scanner import context as run_context
+from hindama.scanner.created import give_up_pending
 from hindama.scanner.evidence import Masker
 from hindama.scanner.limiter import BudgetExhaustedError, RequestLimiter
 from hindama.scanner.modules import Cell, Scan, ScanModule
@@ -60,6 +61,7 @@ from hindama.scanner.modules.authentication import Authentication
 from hindama.scanner.modules.configuration import Configuration
 from hindama.scanner.modules.function_access import FunctionAccess
 from hindama.scanner.modules.object_access import ObjectAccess
+from hindama.scanner.modules.property_access import PropertyAccess
 from hindama.scanner.modules.resource_consumption import ResourceConsumption
 from hindama.scanner.modules.sql_injection import SqlInjection
 from hindama.scanner.progress import Progress
@@ -101,6 +103,7 @@ MODULES: dict[Module, Callable[[], ScanModule]] = {
     Module.CONFIGURATION: Configuration,
     Module.OBJECT_ACCESS: ObjectAccess,
     Module.FUNCTION_ACCESS: FunctionAccess,
+    Module.PROPERTY_ACCESS: PropertyAccess,
     Module.RESOURCE_CONSUMPTION: ResourceConsumption,
     Module.SQL_INJECTION: SqlInjection,
 }
@@ -424,6 +427,9 @@ async def _finish(scanner: Scanner, run: Run, ending: Ending) -> None:
         )
         # Already final (the reconciliation failed it): it resolved there, not twice.
         if ended is not None:
+            # RN-06: a cancelled cell may still be deleting; it overwrites this when it finishes.
+            if await give_up_pending(session, run.id, "not_deleted"):
+                log.warning("created_resources_left", run_id=str(run.id))
             ending_metric = ENDING_METRICS.get(ending.status)
             if ending_metric is not None:
                 await metrics.increment_daily(session, ending_metric)
