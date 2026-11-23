@@ -9,6 +9,10 @@ and accepts `alg: none`; the secure mode verifies it and requires HS256.
 Configuration (section 2.2): the vulnerable mode sends no security headers, reflects any `Origin`
 with credentials, announces its version and answers a malformed invoice id with its traceback.
 
+Property access (version 1.5): the vulnerable mode answers `GET /profile` with fields its schema
+does not declare, and keeps every field of a `POST /wishlist` body, `owner` included. The wish list
+starts empty and must end empty: what Hindama creates, Hindama deletes (RN-06).
+
 SQL injection (version 1.4): `GET /products` and `GET /products/{product_id}` query a real SQLite
 database; the vulnerable mode pastes the value into the SQL text, the secure mode binds it.
 
@@ -115,10 +119,27 @@ class TicketBody(BaseModel):
     title: str
 
 
+class Profile(BaseModel):
+    name: str
+    email: str
+
+
+class WishIn(BaseModel):
+    product: str
+
+
+class WishOut(BaseModel):
+    id: str
+    product: str
+    owner: str
+
+
 def build_lab(mode: Mode) -> FastAPI:
     app = FastAPI(title="Mini API del laboratorio", version="1.3")
     app.state.seen = []  # (method, path, user): what Hindama sent, for the tests
     app.state.catalog_hits = 0  # reset by each run (tests/lab/scanning.py, run_lab)
+    app.state.wishlist = {}  # id -> item: empty before and after every run (LAB-API3-03)
+    app.state.created = 0
     # Read on every request: a test can fix the lab between two runs (task 4.2, RF-68).
     app.state.mode = mode
     tokens = {BETO_TOKEN: "beto", RAIZ_TOKEN: ADMIN}
@@ -263,6 +284,35 @@ def build_lab(mode: Mode) -> FastAPI:
         if response.status_code == 200 and response.body == b"[]":
             raise HTTPException(status_code=404, detail="not found")
         return response
+
+    @app.get("/profile", response_model=None, responses={200: {"model": Profile}})
+    async def profile(name: User) -> Response:
+        shown: dict[str, object] = {"name": name, "email": f"{name}@laboratorio.invalid"}
+        if app.state.mode == Mode.VULNERABLE:  # LAB-API3-01: the whole user row
+            shown |= {"password_hash": "pbkdf2$1$sal$abc", "role": USERS[name]}
+        return JSONResponse(shown)
+
+    @app.post(
+        "/wishlist", status_code=201, response_model=None, responses={201: {"model": WishOut}}
+    )
+    async def add_wish(body: WishIn, request: Request, name: User) -> Response:
+        app.state.created += 1
+        item: dict[str, object] = {"id": f"wish-{app.state.created}", "product": body.product}
+        if app.state.mode == Mode.VULNERABLE:  # LAB-API3-02: every field of the body is kept
+            item = {"owner": name, **(await request.json()), "id": item["id"]}
+        else:
+            item["owner"] = name
+        app.state.wishlist[item["id"]] = item
+        return JSONResponse(item, status_code=201)
+
+    @app.delete("/wishlist/{item_id}", status_code=204)
+    async def remove_wish(item_id: str, name: User) -> Response:
+        item = app.state.wishlist.get(item_id)
+        # The owner, or whoever created it: in the vulnerable mode `owner` may say anything.
+        if item is None or (app.state.mode == Mode.SECURE and item["owner"] != name):
+            raise HTTPException(status_code=404, detail="not found")
+        del app.state.wishlist[item_id]
+        return Response(status_code=204)
 
     @app.get("/admin/users")
     async def list_users(name: User) -> list[dict[str, str]]:

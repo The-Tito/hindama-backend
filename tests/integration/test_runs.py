@@ -255,13 +255,12 @@ async def test_unavailable_modules_are_named(project: Project) -> None:
     assert [e["field"] for e in body["errors"]] == ["modules.1", "modules.2"]  # no contract
 
 
-@pytest.fixture
-def every_module_implemented(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The risky modules are not in the scanner yet (`not_implemented`): RN-05 is still enforced."""
-    monkeypatch.setattr(projects_service, "IMPLEMENTED_MODULES", frozenset(Module))
-
-
-async def test_a_module_the_scanner_does_not_have_is_refused(ana: Analyst) -> None:
+async def test_a_module_the_scanner_does_not_have_is_refused(
+    ana: Analyst, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Every module exists since task 3.2: the rule stays for the next one (RF-45).
+    without = frozenset(Module) - {Module.PROPERTY_ACCESS}
+    monkeypatch.setattr(projects_service, "IMPLEMENTED_MODULES", without)
     project = await new_project(ana, contract=True)
 
     await project.analyst.request(  # meets its other requirement: an authenticated identity
@@ -283,7 +282,6 @@ async def test_a_module_the_scanner_does_not_have_is_refused(ana: Analyst) -> No
     assert [e["field"] for e in body["errors"]] == ["modules.0"]
 
 
-@pytest.mark.usefixtures("every_module_implemented")
 async def test_medium_and_high_risk_need_a_confirmation(ana: Analyst) -> None:
     project = await new_project(ana, contract=True)
 
@@ -703,7 +701,6 @@ async def test_rerun_needs_a_verified_project(project: Project, owner: AsyncEngi
     assert response.json()["code"] == "project.not_verified"  # RN-01
 
 
-@pytest.mark.usefixtures("every_module_implemented")
 async def test_rerun_asks_for_the_risk_confirmation_again(ana: Analyst, owner: AsyncEngine) -> None:
     project = await new_project(ana, contract=True)
     original = (await project.launch(modules=["sql_injection"], confirm_risk=True)).json()

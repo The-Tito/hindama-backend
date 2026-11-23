@@ -59,6 +59,7 @@ IMPLEMENTED_MODULES = frozenset(
         Module.CONFIGURATION,
         Module.OBJECT_ACCESS,
         Module.FUNCTION_ACCESS,
+        Module.PROPERTY_ACCESS,
         Module.RESOURCE_CONSUMPTION,
         Module.SQL_INJECTION,
     }
