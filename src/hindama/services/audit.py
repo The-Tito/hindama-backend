@@ -1,4 +1,4 @@
-"""The audit log: writing the sensitive actions (RF-81 to RF-83, RN-09).
+"""The audit log: the sensitive actions and the administrator's search (CU-21, RF-81 to RF-84).
 
 An entry never holds credentials, justifications, analyst free text or a host in clear (RF-83):
 `details` only takes identifiers and catalog values, and the host travels as its HMAC.
@@ -8,9 +8,11 @@ back leaves no entry. A blocked destination is the exception: the request that h
 usually fails, and the block must be audited anyway (RF-81), so it goes in its own transaction.
 """
 
+import ipaddress
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -18,9 +20,12 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from hindama.core.audit import BlockCollector, HostHasher, collect_blocks
+from hindama.core.destinations import InvalidUrlError, parse_base_url
+from hindama.core.errors import FieldIssue, UnprocessableError
+from hindama.models import AuditLogEntry
 from hindama.models.enums import AuditAction, BlockStage
 from hindama.repositories import audit as repository
-from hindama.repositories.audit import NewEntry
+from hindama.repositories.audit import Filters, NewEntry
 
 log = structlog.get_logger(__name__)
 
@@ -158,3 +163,58 @@ async def write_blocks(
         for block in collector.distinct()
     ]
     await write_detached(session_factory, entries)
+
+
+# ----------------------------------------------------------------------------------- the search
+
+
+def _invalid(field: str, message: str) -> UnprocessableError:
+    return UnprocessableError(
+        "validation.failed",
+        "Datos inválidos",
+        "Revisa los filtros de la bitácora.",
+        [FieldIssue(field, "validation.format", message)],
+    )
+
+
+def search_host(raw: str) -> str:
+    """The host to look for, normalized like a project's (lowercase, IDNA, no port, RF-84).
+
+    Takes a bare name (`api.example.com`), an IP or a whole URL."""
+    value = raw.strip()
+    if "://" not in value:
+        try:  # a bare IPv6 needs brackets inside a URL
+            if isinstance(ipaddress.ip_address(value), ipaddress.IPv6Address):
+                value = f"[{value}]"
+        except ValueError:
+            pass
+        value = f"https://{value}"
+    try:
+        return parse_base_url(value).host
+    except InvalidUrlError:
+        raise _invalid("host", "Escribe un host o una URL válida.") from None
+
+
+async def list_entries(
+    session: AsyncSession,
+    hasher: HostHasher,
+    *,
+    occurred_from: datetime | None,
+    occurred_to: datetime | None,
+    actions: list[AuditAction],
+    user_id: UUID | None,
+    host: str | None,
+    page: int,
+    page_size: int,
+) -> tuple[list[AuditLogEntry], int]:
+    # Both carry their offset (RFC 3339, checked by the router): they compare as instants.
+    if occurred_from is not None and occurred_to is not None and occurred_from > occurred_to:
+        raise _invalid("occurred_to", "La fecha final no puede ser anterior a la inicial.")
+    filters = Filters(
+        occurred_from=occurred_from,
+        occurred_to=occurred_to,
+        actions=tuple(actions),
+        user_id=user_id,
+        hosts=None if host is None else tuple(hasher.candidates(search_host(host))),
+    )
+    return await repository.list_page(session, filters, page, page_size)

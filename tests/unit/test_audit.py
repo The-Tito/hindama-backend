@@ -11,7 +11,9 @@ from pydantic import SecretStr, ValidationError
 
 from hindama.config import Settings
 from hindama.core.audit import HostHasher, client_ip, collect_blocks, note_block
+from hindama.core.errors import UnprocessableError
 from hindama.core.safe_http import BlockReason, DestinationBlockedError, SafeHttpClient
+from hindama.services.audit import search_host
 from tests.conftest import make_settings
 from tests.servers import ScriptedResolver
 
@@ -184,3 +186,33 @@ async def test_an_unresolved_name_is_not_noted_as_a_block() -> None:
 
     assert error.value.reason == BlockReason.UNRESOLVED
     assert collector.blocks == []
+
+
+# ------------------------------------------------------------------ the host searched (RF-84)
+
+
+@pytest.mark.parametrize(
+    ("written", "host"),
+    [
+        ("api.ejemplo.com", "api.ejemplo.com"),
+        ("  API.Ejemplo.COM. ", "api.ejemplo.com"),
+        ("https://api.ejemplo.com:8443/v1?x=1", "api.ejemplo.com"),
+        ("http://api.ejemplo.com", "api.ejemplo.com"),
+        ("münchen.ejemplo.com", "xn--mnchen-3ya.ejemplo.com"),
+        ("203.0.113.25", "203.0.113.25"),
+        ("2001:db8::1", "2001:db8::1"),
+        ("https://[2001:DB8::1]:8443/", "2001:db8::1"),
+    ],
+)
+def test_the_searched_host_is_normalized_like_a_project_host(written: str, host: str) -> None:
+    assert search_host(written) == host
+
+
+@pytest.mark.parametrize(
+    "written", ["no es un host", "ftp://api.ejemplo.com", "https://", "a@b.com", "-x-.com"]
+)
+def test_a_search_for_something_that_is_not_a_host(written: str) -> None:
+    with pytest.raises(UnprocessableError) as error:
+        search_host(written)
+
+    assert [(e.field, e.code) for e in error.value.errors] == [("host", "validation.format")]

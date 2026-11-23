@@ -11,13 +11,13 @@ port="${HINDAMA_SCHEMATHESIS_PORT:-8765}"
 token_file="${HINDAMA_SCHEMATHESIS_TOKEN:-.schemathesis-token}"
 export HINDAMA_SCHEMATHESIS_PORT="$port" HINDAMA_SCHEMATHESIS_TOKEN="$token_file"
 
-rm -f "$token_file"
+rm -f "$token_file" "$token_file.admin"
 uv run python -m tests.schemathesis.serve &
 server=$!
 cleanup() {
   kill -TERM "$server" 2>/dev/null || true
   wait "$server" 2>/dev/null || true
-  rm -f "$token_file"
+  rm -f "$token_file" "$token_file.admin"
   uv run python -m tests.schemathesis.serve --cleanup
 }
 trap cleanup EXIT
@@ -32,6 +32,16 @@ done
 uv run schemathesis run "$contract" \
   --url "http://127.0.0.1:$port" \
   --header "Authorization: Bearer $(cat "$token_file")" \
+  --checks all \
+  --max-examples 50 \
+  --seed 20261105 \
+  "$@"
+
+# `/admin/*` answers 403 to the analyst: a second pass as the administrator tests its 200s.
+uv run schemathesis run "$contract" \
+  --url "http://127.0.0.1:$port" \
+  --header "Authorization: Bearer $(cat "$token_file.admin")" \
+  --include-path-regex '^/admin/' \
   --checks all \
   --max-examples 50 \
   --seed 20261105 \

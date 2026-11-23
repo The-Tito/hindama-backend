@@ -5,16 +5,21 @@ search with its filters (RF-84). The scanner's entries (`project_verification_lo
 during a run) are checked in test_scanner.py; RN-09 in test_findings.py.
 """
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from hindama.core.audit import HostHasher
+from hindama.models.base import new_id
 from tests.audit import actions, audit_entries, details_of
 from tests.conftest import TEST_HASHER
 from tests.dns import FakeResolver
 from tests.integration.conftest import Analyst
 from tests.integration.test_runs import start
+from tests.tokens import ADMIN_GROUP, FakeUserPool
 
 IP = "X-Hindama-Client-IP"
 BROWSER_IP = "203.0.113.25"
@@ -28,12 +33,30 @@ async def user_id(analyst: Analyst) -> str:
 
 
 @pytest.fixture
+def admin(anonymous_client: httpx.AsyncClient, user_pool: FakeUserPool, subs: list[str]) -> Analyst:
+    """The administrator: same client, with the administrators' group in the token (RN-04)."""
+    admin = Analyst(anonymous_client, user_pool, str(new_id()))
+    subs.append(admin.sub)
+    admin.headers = {
+        "Authorization": f"Bearer {user_pool.token(sub=admin.sub, groups=[ADMIN_GROUP])}"
+    }
+    return admin
+
+
+@pytest.fixture
 async def analyst(new_analyst: Any) -> Analyst:
     """An analyst whose browser IP the frontend reports from the first request."""
     analyst: Analyst = new_analyst()
     analyst.headers[IP] = BROWSER_IP
     await analyst.accept_terms()
     return analyst
+
+
+async def search(admin: Analyst, **params: Any) -> dict[str, Any]:
+    response = await admin.request("GET", "/admin/audit-log", params=params)
+    assert response.status_code == 200, response.text
+    body: dict[str, Any] = response.json()
+    return body
 
 
 # ------------------------------------------------------------------ what is audited (RF-81)
@@ -239,3 +262,131 @@ async def test_an_unresolved_name_is_not_a_block(
     assert "destination_blocked" not in actions(
         await audit_entries(owner, project_id=project["id"])
     )
+
+
+# ------------------------------------------------------------------ the search (RF-84, CU-21)
+
+
+async def test_only_the_administrator_reads_the_audit_log(analyst: Analyst) -> None:
+    response = await analyst.request("GET", "/admin/audit-log")
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "role.forbidden"
+
+
+async def test_the_administrator_filters_by_user_and_action(
+    admin: Analyst, analyst: Analyst
+) -> None:
+    me = await user_id(analyst)
+    project = await analyst.create()
+    await analyst.request("POST", f"/projects/{project['id']}/verification", json={"method": "dns"})
+
+    everything = await search(admin, user_id=me)
+    verified = await search(admin, user_id=me, action="project_verified")
+    two = await search(admin, user_id=me, action=["project_verified", "account_created"])
+
+    assert [e["action"] for e in everything["items"]] == [
+        "project_verified",  # newest first
+        "project_created",
+        "account_created",
+    ]
+    assert everything["total"] == 3
+    entry = verified["items"][0]
+    assert entry == {
+        "id": entry["id"],
+        "occurred_at": entry["occurred_at"],
+        "action": "project_verified",
+        "user_id": me,
+        "project_id": project["id"],
+        "source_ip": BROWSER_IP,
+        "details": {"verification_method": "dns"},
+    }
+    assert [e["action"] for e in two["items"]] == ["project_verified", "account_created"]
+
+
+@pytest.mark.parametrize(
+    "written",
+    [HOST, "API.Ejemplo.com", f"https://{HOST}:8443/v2/openapi.json", f"http://{HOST.upper()}."],
+)
+async def test_the_administrator_finds_a_host_without_seeing_it(
+    admin: Analyst, analyst: Analyst, written: str
+) -> None:
+    """A1 of CU-21: the server computes the HMAC of what the administrator wrote."""
+    me = await user_id(analyst)
+    project = await analyst.create()
+    await analyst.create(base_url="https://otra-api.ejemplo.com")
+
+    found = await search(admin, user_id=me, host=written)
+
+    assert [(e["action"], e["project_id"]) for e in found["items"]] == [
+        ("project_created", project["id"])
+    ]
+    assert HOST not in repr(found)  # the response never names the host
+
+
+async def test_a_host_searched_under_an_old_key_version(
+    admin: Analyst, analyst: Analyst, owner: AsyncEngine, app: Any
+) -> None:
+    """After a rotation, the entries written with the previous version are still found."""
+    me = await user_id(analyst)
+    await analyst.create()
+    old = app.state.host_hasher
+    rotated = HostHasher({**old._keys, 2: b"\x01" * 32}, current_version=2)
+    app.state.host_hasher = rotated
+    await analyst.create(name="Después de rotar")
+
+    found = await search(admin, user_id=me, host=HOST)
+
+    assert [e["details"] for e in found["items"]] == [{}, {}]
+    stored = await audit_entries(owner, user_id=me)
+    assert sorted(e.hmac_version for e in stored if e.hmac_version is not None) == [1, 2]
+
+
+async def test_the_administrator_filters_by_date(admin: Analyst, analyst: Analyst) -> None:
+    me = await user_id(analyst)
+    now = datetime.now(UTC)
+
+    recent = await search(admin, user_id=me, occurred_from=(now - timedelta(minutes=5)).isoformat())
+    future = await search(admin, user_id=me, occurred_from=(now + timedelta(hours=1)).isoformat())
+    past = await search(admin, user_id=me, occurred_to=(now - timedelta(days=1)).isoformat())
+
+    assert recent["total"] == 1
+    assert future["total"] == past["total"] == 0
+
+
+@pytest.mark.parametrize(
+    ("params", "field"),
+    [
+        (
+            {"occurred_from": "2026-11-20T00:00:00Z", "occurred_to": "2026-11-19T00:00:00Z"},
+            "occurred_to",
+        ),
+        ({"occurred_to": "0.5"}, "occurred_to"),  # a Unix timestamp is not RFC 3339
+        ({"occurred_from": "2026-11-20"}, "occurred_from"),  # no time
+        ({"occurred_from": "2026-11-20T10:00:00"}, "occurred_from"),  # no offset
+        ({"host": "no es un host"}, "host"),
+        ({"host": "ftp://api.ejemplo.com"}, "host"),
+    ],
+)
+async def test_invalid_filters(admin: Analyst, params: dict[str, str], field: str) -> None:
+    response = await admin.request("GET", "/admin/audit-log", params=params)
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "validation.failed"
+    assert [(e["field"], e["code"]) for e in body["errors"]] == [(field, "validation.format")]
+
+
+async def test_a_page_of_the_audit_log(admin: Analyst, analyst: Analyst) -> None:
+    me = await user_id(analyst)
+    for index in range(3):
+        await analyst.create(name=f"Proyecto {index}")
+
+    first = await search(admin, user_id=me, page_size=2)
+    second = await search(admin, user_id=me, page_size=2, page=2)
+
+    assert first["total"] == second["total"] == 4
+    assert len(first["items"]) == 2
+    assert [e["action"] for e in second["items"]] == ["project_created", "account_created"]
+    ids = [e["id"] for e in first["items"] + second["items"]]
+    assert ids == sorted(ids, reverse=True)

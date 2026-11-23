@@ -7,10 +7,11 @@ rejects both (RF-83).
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import insert, select
+from sqlalchemy import and_, func, insert, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hindama.core.audit import HostDigest
@@ -50,3 +51,50 @@ async def add(session: AsyncSession, entry: NewEntry) -> None:
             details=entry.details or {},
         )
     )
+
+
+@dataclass(frozen=True, slots=True)
+class Filters:
+    occurred_from: datetime | None = None
+    occurred_to: datetime | None = None
+    actions: tuple[AuditAction, ...] = ()
+    user_id: UUID | None = None
+    hosts: tuple[HostDigest, ...] | None = None  # None: no host filter
+
+
+async def list_page(
+    session: AsyncSession, filters: Filters, page: int, page_size: int
+) -> tuple[list[AuditLogEntry], int]:
+    conditions = []
+    if filters.occurred_from is not None:
+        conditions.append(AuditLogEntry.occurred_at >= filters.occurred_from)
+    if filters.occurred_to is not None:
+        conditions.append(AuditLogEntry.occurred_at < filters.occurred_to)
+    if filters.actions:
+        conditions.append(AuditLogEntry.action.in_([a.value for a in filters.actions]))
+    if filters.user_id is not None:
+        conditions.append(AuditLogEntry.user_id == filters.user_id)
+    if filters.hosts is not None:
+        conditions.append(
+            or_(
+                *(
+                    and_(
+                        AuditLogEntry.host_hmac == digest.value,
+                        AuditLogEntry.hmac_version == digest.version,
+                    )
+                    for digest in filters.hosts
+                )
+            )
+        )
+    total = (
+        await session.scalar(select(func.count()).select_from(AuditLogEntry).where(*conditions))
+        or 0
+    )
+    statement = (
+        select(AuditLogEntry)
+        .where(*conditions)
+        .order_by(AuditLogEntry.occurred_at.desc(), AuditLogEntry.id.desc())
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+    )
+    return list((await session.scalars(statement)).all()), total

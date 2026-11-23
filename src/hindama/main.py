@@ -13,6 +13,7 @@ from fastapi import FastAPI
 
 from hindama.api import (
     accounts,
+    admin,
     contracts,
     findings,
     health,
@@ -163,4 +164,5 @@ def create_app(
     app.include_router(policy.router)
     app.include_router(runs.router)
     app.include_router(findings.router)
+    app.include_router(admin.router)
     return app
