@@ -2,6 +2,12 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versiones con [SemVer](https://semver.org/lang/es/). La versión del backend es independiente de la del contrato de la API (`hindama-docs/03-api/openapi.yaml`).
 
+## [Sin publicar]
+
+### Cambiado
+
+- Contrato 0.8.0: los módulos que el motor todavía no tiene (`property_access`, `resource_consumption`, `sql_injection`) informan `not_implemented` en `modules[].missing` y lanzarlos responde `run.module_unavailable`, en lugar de planear 0 celdas en silencio (RF-45).
+
 ## [0.1.0] — 2026-11-23
 
 Primera versión entregable. Implementa el **contrato 0.7.0 completo**: 39 de 39 operaciones, cubiertas por 992 pruebas y verificadas con Schemathesis como analista y como administrador.
