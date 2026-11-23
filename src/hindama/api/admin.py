@@ -2,10 +2,12 @@
 
 `GET /admin/audit-log` (CU-21; RF-81 to RF-84). The administrator's session is the only one the
 `audit_log` policy lets read (RLS on `app.role`); the analyst gets 403 before any query.
+
+`GET /admin/stats` (CU-20; RF-78, RF-79, RF-89): only the anonymous metric tables.
 """
 
 import re
-from datetime import datetime
+from datetime import UTC, date, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -17,9 +19,10 @@ from hindama.api.projects import MAX_PAGE
 from hindama.api.runs import unique
 from hindama.models import AuditLogEntry as AuditLogRow
 from hindama.models.enums import AuditAction
-from hindama.schemas.admin import AuditDetails, AuditLogEntry, AuditLogPage
+from hindama.schemas.admin import AdminStats, AuditDetails, AuditLogEntry, AuditLogPage, StatsGroup
 from hindama.schemas.common import SINGLE_LINE
 from hindama.services import audit as service
+from hindama.services import stats
 
 router = APIRouter(tags=["Admin"])
 
@@ -37,6 +40,18 @@ def _rfc3339(value: object) -> object:
 
 
 DateTime = Annotated[datetime, BeforeValidator(_rfc3339)]
+
+# `format: date`: only `YYYY-MM-DD`. Pydantic alone would also take a Unix timestamp.
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
+
+
+def _date(value: object) -> object:
+    if isinstance(value, str) and not _DATE.fullmatch(value):
+        raise ValueError("not a date (YYYY-MM-DD)")
+    return value
+
+
+Date = Annotated[date, BeforeValidator(_date)]
 
 
 def _entry(row: AuditLogRow) -> AuditLogEntry:
@@ -86,3 +101,19 @@ async def list_audit_log(
     return AuditLogPage(
         items=[_entry(row) for row in rows], total=total, page=page, page_size=page_size
     )
+
+
+@router.get(
+    "/admin/stats",
+    operation_id="getAdminStats",
+    summary="Estadísticas agregadas de la plataforma",
+)
+async def get_admin_stats(
+    _: Admin,
+    db: DbSession,
+    date_from: Date | None = None,
+    date_to: Date | None = None,
+    group: StatsGroup = "day",
+) -> AdminStats:
+    chosen = stats.period(date_from, date_to, group, today=datetime.now(UTC).date())
+    return await stats.admin_stats(db, chosen)
