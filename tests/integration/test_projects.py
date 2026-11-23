@@ -52,9 +52,14 @@ ALL_MISSING = {
         "no_admin_identity",
         "policy_unconfirmed",
     ],
-    "property_access": ["project_not_verified", "no_contract", "insufficient_identities"],
-    "resource_consumption": ["project_not_verified", "no_contract"],
-    "sql_injection": ["project_not_verified", "no_contract"],
+    "property_access": [
+        "project_not_verified",
+        "no_contract",
+        "insufficient_identities",
+        "not_implemented",
+    ],
+    "resource_consumption": ["project_not_verified", "no_contract", "not_implemented"],
+    "sql_injection": ["project_not_verified", "no_contract", "not_implemented"],
 }
 
 
@@ -570,9 +575,9 @@ async def test_dashboard_with_activity(ana: Analyst, owner: AsyncEngine) -> None
         "configuration": [],
         "object_access": [],
         "function_access": ["policy_unconfirmed"],  # its admin-only operation was retired
-        "property_access": [],
-        "resource_consumption": [],
-        "sql_injection": [],
+        "property_access": ["not_implemented"],  # RF-45: the scanner does not have them yet
+        "resource_consumption": ["not_implemented"],
+        "sql_injection": ["not_implemented"],
     }
     assert listed["open_findings"] == 3
     assert datetime.fromisoformat(listed["last_run_at"]) == NOW

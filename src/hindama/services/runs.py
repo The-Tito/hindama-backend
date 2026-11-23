@@ -33,12 +33,14 @@ from hindama.models import ContractVersion, Run
 from hindama.models.enums import (
     ACTIVE_RUN_STATUSES,
     CreatedResourceStatus,
+    DailyMetricName,
     EndReason,
     Module,
     RunStatus,
     Severity,
     Verdict,
 )
+from hindama.repositories import metrics
 from hindama.repositories import projects as projects_repository
 from hindama.repositories import runs as repository
 from hindama.repositories.runs import Cell
@@ -150,6 +152,8 @@ async def create_run(
     )
     session.add(run)
     await session.flush()
+    # Same transaction: a run that Redis rolls back is not counted (RF-78).
+    await metrics.increment_daily(session, DailyMetricName.RUNS_STARTED)
     try:
         run.job_id = await queue.enqueue(run.id)
     except QueueUnavailableError as error:
@@ -229,6 +233,7 @@ async def cancel_run(
         run.status = RunStatus.CANCELLED
         run.end_reason = EndReason.CANCELLED_BY_USER
         run.finished_at = func.now()
+        await metrics.increment_daily(session, DailyMetricName.RUNS_CANCELLED)
     try:
         await queue.abort(run.id)
     except QueueUnavailableError as error:

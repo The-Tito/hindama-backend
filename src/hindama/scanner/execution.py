@@ -42,6 +42,7 @@ from hindama.models.enums import (
     AuditAction,
     AuthType,
     BlockStage,
+    DailyMetricName,
     EndReason,
     Module,
     RunStatus,
@@ -49,6 +50,7 @@ from hindama.models.enums import (
     VerificationStatus,
 )
 from hindama.repositories import audit as audit_log
+from hindama.repositories import metrics
 from hindama.repositories.audit import NewEntry
 from hindama.scanner import context as run_context
 from hindama.scanner.evidence import Masker
@@ -91,6 +93,11 @@ MODULES: dict[Module, Callable[[], ScanModule]] = {
     Module.CONFIGURATION: Configuration,
     Module.OBJECT_ACCESS: ObjectAccess,
     Module.FUNCTION_ACCESS: FunctionAccess,
+}
+# Anonymous count of how runs end (RF-78); `runs_started` is counted when the API creates it.
+ENDING_METRICS = {
+    RunStatus.CANCELLED: DailyMetricName.RUNS_CANCELLED,
+    RunStatus.FAILED: DailyMetricName.RUNS_FAILED,
 }
 
 
@@ -398,6 +405,9 @@ async def _finish(scanner: Scanner, run: Run, ending: Ending) -> None:
         )
         # Already final (the reconciliation failed it): it resolved there, not twice.
         if ended is not None:
+            ending_metric = ENDING_METRICS.get(ending.status)
+            if ending_metric is not None:
+                await metrics.increment_daily(session, ending_metric)
             resolved = await resolve_not_detected(session, run.project_id, run.id)
             if resolved:
                 log.info("findings_resolved", run_id=str(run.id), count=resolved)

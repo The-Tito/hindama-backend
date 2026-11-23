@@ -31,7 +31,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from hindama.core.run_events import RunEvent, RunEvents
 from hindama.core.run_queue import QueueUnavailableError, RunQueue
 from hindama.models import Run
-from hindama.models.enums import EndReason, RunStatus
+from hindama.models.enums import DailyMetricName, EndReason, RunStatus
+from hindama.repositories import metrics
 from hindama.scanner.resolution import resolve_not_detected
 
 log = structlog.get_logger(__name__)
@@ -90,7 +91,7 @@ async def _expired(
             )
         ).all()
         for run in runs:
-            _fail(run, EndReason.HEARTBEAT_EXPIRED)
+            await _fail(session, run, EndReason.HEARTBEAT_EXPIRED)
             # ADR-014: what it managed to evaluate counts, as for any failed run (RF-68).
             await resolve_not_detected(session, run.project_id, run.id)
     for run in runs:
@@ -125,7 +126,7 @@ async def _queued(
                 run.job_id = await queue.enqueue(run.id)
                 requeued.append(run)
             else:
-                _fail(run, EndReason.LOST_IN_QUEUE)
+                await _fail(session, run, EndReason.LOST_IN_QUEUE)
                 lost.append(run)
     for run in requeued:
         log.info("run_requeued", project_id=str(run.project_id), run_id=str(run.id))
@@ -134,11 +135,12 @@ async def _queued(
     return [run.id for run in requeued], [run.id for run in lost]
 
 
-def _fail(run: Run, reason: EndReason) -> None:
+async def _fail(session: AsyncSession, run: Run, reason: EndReason) -> None:
     run.status = RunStatus.FAILED
     run.end_reason = reason
     run.finished_at = func.now()
     run.current_module = None
+    await metrics.increment_daily(session, DailyMetricName.RUNS_FAILED)  # RF-78
 
 
 async def _ended(events: RunEvents, run: Run, reason: EndReason) -> None:

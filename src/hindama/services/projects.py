@@ -49,6 +49,12 @@ REQUIREMENTS = (
     "no_admin_identity",
     "no_resources",
     "policy_unconfirmed",
+    "not_implemented",
+)
+# The modules the scanner has (`scanner/execution.py`, MODULES; a test keeps both equal). The rest
+# report `not_implemented` (contract 0.8.0) instead of planning zero cells in silence (RF-45).
+IMPLEMENTED_MODULES = frozenset(
+    {Module.AUTHENTICATION, Module.CONFIGURATION, Module.OBJECT_ACCESS, Module.FUNCTION_ACCESS}
 )
 
 _URL_MESSAGES = {
@@ -162,6 +168,8 @@ def module_availability(
         Module.RESOURCE_CONSUMPTION: {**common},
         Module.SQL_INJECTION: {**common},
     }
+    for module, need in needs.items():
+        need["not_implemented"] = module not in IMPLEMENTED_MODULES
     return [
         Availability(
             module=module,

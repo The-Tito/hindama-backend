@@ -22,6 +22,7 @@ from hindama.core.run_events import RunEvent
 from hindama.core.run_queue import job_key
 from hindama.db.session import create_session_factory
 from hindama.models import AuditLogEntry, Result, Run
+from hindama.models.enums import DailyMetricName
 from hindama.scanner import reconciliation
 from hindama.scanner.config import ScannerSettings
 from hindama.scanner.execution import Scanner, execute
@@ -30,7 +31,7 @@ from hindama.scanner.worker import build_worker
 from tests.conftest import TEST_AUDIT_KEY, TEST_CREDENTIAL_KEY
 from tests.events import MemoryRunEvents
 from tests.integration.conftest import SCANNER_URL, Analyst
-from tests.integration.test_runs import Project, new_project, owner_session, start
+from tests.integration.test_runs import Project, daily, new_project, owner_session, start
 from tests.integration.test_scanner import REDIS_URL, Touches, saq_queue, stored, until
 from tests.lab.scanning import lab_project, lab_scanner
 from tests.ownership import ScriptedChecker
@@ -81,10 +82,12 @@ async def test_a_running_run_without_heartbeat_fails(
             update(Run).where(Run.id == run_id).values(cells_planned=5, cells_evaluated=3)
         )
     await age(owner, run_id, heartbeat_at=61)
+    before = await daily(owner, DailyMetricName.RUNS_FAILED)
 
     result = await run_reconciliation(scanner_engine, run_queue, run_events)
 
     assert result.expired == [run_id]
+    assert await daily(owner, DailyMetricName.RUNS_FAILED) == before + 1  # RF-78
     run = await stored(owner, run_id)
     assert (run.status, run.end_reason) == ("failed", "heartbeat_expired")  # RNF-18
     assert run.finished_at is not None
@@ -212,10 +215,12 @@ async def test_an_old_queued_run_without_job_fails(
     run_id = await launch(project)
     await age(owner, run_id, created_at=11 * 60)
     run_queue.lost.add(run_id)
+    before = await daily(owner, DailyMetricName.RUNS_FAILED)
 
     result = await run_reconciliation(scanner_engine, run_queue, run_events)
 
     assert result.lost == [run_id]
+    assert await daily(owner, DailyMetricName.RUNS_FAILED) == before + 1  # RF-78
     run = await stored(owner, run_id)
     assert (run.status, run.end_reason) == ("failed", "lost_in_queue")
     assert run.finished_at is not None
