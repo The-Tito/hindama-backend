@@ -264,7 +264,18 @@ def every_module_implemented(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_a_module_the_scanner_does_not_have_is_refused(ana: Analyst) -> None:
     project = await new_project(ana, contract=True)
 
-    response = await project.launch(modules=["sql_injection"], confirm_risk=True)
+    await project.analyst.request(  # meets its other requirement: an authenticated identity
+        "POST",
+        f"/projects/{project.id}/identities",
+        json={
+            "name": "A",
+            "role": "user",
+            "auth_type": "bearer",
+            "credential": {"token": "t" * 12},
+        },
+    )
+
+    response = await project.launch(modules=["property_access"], confirm_risk=True)
 
     assert response.status_code == 422
     body = response.json()

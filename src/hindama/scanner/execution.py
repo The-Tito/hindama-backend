@@ -61,6 +61,7 @@ from hindama.scanner.modules.configuration import Configuration
 from hindama.scanner.modules.function_access import FunctionAccess
 from hindama.scanner.modules.object_access import ObjectAccess
 from hindama.scanner.modules.resource_consumption import ResourceConsumption
+from hindama.scanner.modules.sql_injection import SqlInjection
 from hindama.scanner.progress import Progress
 from hindama.scanner.recorder import Recorder
 from hindama.scanner.requester import Requester
@@ -101,6 +102,7 @@ MODULES: dict[Module, Callable[[], ScanModule]] = {
     Module.OBJECT_ACCESS: ObjectAccess,
     Module.FUNCTION_ACCESS: FunctionAccess,
     Module.RESOURCE_CONSUMPTION: ResourceConsumption,
+    Module.SQL_INJECTION: SqlInjection,
 }
 # Anonymous count of how runs end (RF-78); `runs_started` is counted when the API creates it.
 ENDING_METRICS = {
