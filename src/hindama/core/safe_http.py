@@ -35,6 +35,7 @@ import httpcore
 import httpx
 import structlog
 
+from hindama.core.audit import note_block
 from hindama.core.destinations import (
     ALLOWED_SCHEMES,
     IPAddress,
@@ -67,7 +68,7 @@ class BlockReason(StrEnum):
 
 
 class DestinationBlockedError(Exception):
-    """The request never left: the destination is not allowed (logged; RF-81 audits it later)."""
+    """The request never left: the destination is not allowed (logged and noted for RF-81)."""
 
     def __init__(self, reason: BlockReason, host: str) -> None:
         super().__init__(f"{reason.value}: {host}")
@@ -366,4 +367,7 @@ class SafeHttpClient:
 
     def _blocked_error(self, reason: BlockReason, host: str) -> DestinationBlockedError:
         log.warning("destination_blocked", reason=reason.value, host=host, bound_host=self.host)
+        # An unresolved name is not a block: the callers treat it as a connection error.
+        if reason != BlockReason.UNRESOLVED:
+            note_block(reason.value, self.host)  # audited by whoever collects (RF-81)
         return DestinationBlockedError(reason, host)

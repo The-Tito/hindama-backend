@@ -34,6 +34,7 @@ pytestmark = pytest.mark.skipif(
 
 INSUFFICIENT_PRIVILEGE = "42501"  # missing GRANT, or a row rejected by a policy
 RAISE_EXCEPTION = "P0001"  # the audit log trigger
+CHECK_VIOLATION = "23514"
 
 
 @dataclass(frozen=True)
@@ -141,8 +142,12 @@ async def sqlstate_of(
     return None
 
 
-async def insert_audit_event(connection: AsyncConnection) -> None:
-    await connection.execute(text("INSERT INTO audit_log (action) VALUES ('test.event')"))
+async def insert_audit_event(connection: AsyncConnection, marker: UUID | None = None) -> None:
+    """An entry of the catalog; `marker` (its project_id) tells it apart from the others."""
+    await connection.execute(
+        text("INSERT INTO audit_log (action, project_id) VALUES ('account_created', :marker)"),
+        {"marker": marker},
+    )
 
 
 # ---------------------------------------------------------------- ADR-013: isolation by owner
@@ -255,7 +260,8 @@ async def test_only_the_administrator_reads_the_audit_log(
         "DELETE FROM audit_log",
         "TRUNCATE audit_log",
         # The date is always the database's: no backdating into the purge window.
-        "INSERT INTO audit_log (action, occurred_at) VALUES ('test.event', now() - interval '1y')",
+        "INSERT INTO audit_log (action, occurred_at)"
+        " VALUES ('account_created', now() - interval '1y')",
         "SELECT purge_audit_log()",
     ],
 )
@@ -284,12 +290,12 @@ async def test_trigger_protects_recent_events_even_from_the_owner(
 
 
 async def test_purge_deletes_only_expired_events(owner: AsyncEngine, scanner: AsyncEngine) -> None:
-    marker = f"test.purge.{new_id()}"
+    marker = new_id()
     async with owner.begin() as connection:
         await connection.execute(
             text(
-                "INSERT INTO audit_log (action, occurred_at)"
-                " VALUES (:a, now() - interval '7 months')"
+                "INSERT INTO audit_log (action, project_id, occurred_at)"
+                " VALUES ('account_created', :a, now() - interval '7 months')"
             ),
             {"a": marker},
         )
@@ -300,16 +306,25 @@ async def test_purge_deletes_only_expired_events(owner: AsyncEngine, scanner: As
 
     async with transaction(owner) as connection:
         remaining = await connection.execute(
-            text("SELECT count(*) FROM audit_log WHERE action = :a"), {"a": marker}
+            text("SELECT count(*) FROM audit_log WHERE project_id = :a"), {"a": marker}
         )
         assert remaining.scalar_one() == 0
         # A recent event survives the purge.
-        await insert_audit_event(connection)
+        recent_marker = new_id()
+        await insert_audit_event(connection, recent_marker)
         await connection.execute(text("SELECT purge_audit_log()"))
         recent = await connection.execute(
-            text("SELECT count(*) FROM audit_log WHERE action = 'test.event'")
+            text("SELECT count(*) FROM audit_log WHERE project_id = :a"), {"a": recent_marker}
         )
         assert recent.scalar_one() == 1
+
+
+async def test_the_action_belongs_to_the_catalog(owner: AsyncEngine) -> None:
+    """RF-81: the log only holds actions of `AuditAction`, not free text."""
+    async with transaction(owner) as connection:
+        with pytest.raises(DBAPIError) as error:
+            await connection.execute(text("INSERT INTO audit_log (action) VALUES ('test.event')"))
+        assert getattr(error.value.orig, "sqlstate", None) == CHECK_VIOLATION
 
 
 @pytest.mark.parametrize(

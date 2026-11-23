@@ -33,7 +33,7 @@ from hindama.scanner import execution
 from hindama.scanner.config import ScannerSettings
 from hindama.scanner.execution import Scanner, execute
 from hindama.scanner.worker import build_worker
-from tests.conftest import TEST_CREDENTIAL_KEY
+from tests.conftest import TEST_AUDIT_KEY, TEST_CREDENTIAL_KEY
 from tests.events import MemoryRunEvents
 from tests.integration.conftest import SCANNER_URL, Analyst
 from tests.integration.test_runs import Project, finish, new_project, owner_session, sse_events
@@ -302,6 +302,7 @@ def test_the_worker_schedules_the_reconciliation_and_the_purge() -> None:
         database_url=SecretStr("postgresql+asyncpg://unused@localhost:1/unused"),
         redis_url=SecretStr("redis://localhost:1/0"),
         credential_keys={1: SecretStr(TEST_CREDENTIAL_KEY)},
+        audit_hmac_keys={1: SecretStr(TEST_AUDIT_KEY)},
     )
 
     worker = build_worker(settings)
@@ -428,6 +429,7 @@ async def test_the_worker_executes_an_enqueued_run(
         redis_url=SecretStr(REDIS_URL),
         concurrency=2,
         credential_keys={1: SecretStr(TEST_CREDENTIAL_KEY)},
+        audit_hmac_keys={1: SecretStr(TEST_AUDIT_KEY)},
     )
     worker = build_worker(settings, queue=saq_queue, scanner=scanner)
     job = await saq_queue.job(key)
@@ -500,6 +502,7 @@ async def test_cancelling_a_running_scan_stops_it_and_keeps_the_partial_results(
         redis_url=SecretStr(REDIS_URL),
         concurrency=1,
         credential_keys={1: SecretStr(TEST_CREDENTIAL_KEY)},
+        audit_hmac_keys={1: SecretStr(TEST_AUDIT_KEY)},
     )
     worker = build_worker(settings, queue=saq_queue, scanner=scanner)
     running = asyncio.create_task(worker.start())

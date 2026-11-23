@@ -5,6 +5,7 @@ projects they mention. Metrics have no user, project, host or operation at all.
 """
 
 import datetime as dt
+from ipaddress import IPv4Address, IPv6Address
 from typing import Any
 from uuid import UUID
 
@@ -13,7 +14,7 @@ from sqlalchemy.dialects.postgresql import INET, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from hindama.models.base import Base, created_at, one_of, uuid_pk
-from hindama.models.enums import DailyMetricName, Module, Severity
+from hindama.models.enums import AuditAction, DailyMetricName, Module, Severity
 
 
 class AuditLogEntry(Base):
@@ -22,6 +23,7 @@ class AuditLogEntry(Base):
     __tablename__ = "audit_log"
     __table_args__ = (
         CheckConstraint("(host_hmac IS NULL) = (hmac_version IS NULL)", name="hmac_versioned"),
+        CheckConstraint(one_of("action", AuditAction), name="action"),
         Index(None, "occurred_at"),
         Index(None, "user_id", "occurred_at"),
         Index(None, "action", "occurred_at"),
@@ -35,7 +37,8 @@ class AuditLogEntry(Base):
     project_id: Mapped[UUID | None]  # opaque: no foreign key
     host_hmac: Mapped[bytes | None] = mapped_column(LargeBinary)  # HMAC-SHA256, never the host
     hmac_version: Mapped[int | None] = mapped_column(SmallInteger)
-    source_ip: Mapped[str | None] = mapped_column(INET)
+    # Written as text; asyncpg reads INET back as an ipaddress object.
+    source_ip: Mapped[IPv4Address | IPv6Address | str | None] = mapped_column(INET)
     # Modules, limits, block reason... never credentials, justifications or analyst free text.
     details: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
 

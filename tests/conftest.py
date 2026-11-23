@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from pydantic import SecretStr
 
 from hindama.config import Settings
+from hindama.core.audit import HostHasher
 from hindama.core.ownership import OwnershipChecker
 from hindama.core.run_queue import RunQueue
 from hindama.main import create_app
@@ -37,6 +38,9 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 
 # A fresh key per test session: no test credential outlives it.
 TEST_CREDENTIAL_KEY = base64.b64encode(os.urandom(32)).decode()
+TEST_AUDIT_KEY = base64.b64encode(os.urandom(32)).decode()
+# Same key as the settings of every test app: tests compute the HMAC the log must hold.
+TEST_HASHER = HostHasher({1: base64.b64decode(TEST_AUDIT_KEY)}, 1)
 
 
 def make_settings(database_url: str) -> Settings:
@@ -48,6 +52,7 @@ def make_settings(database_url: str) -> Settings:
         cognito_user_pool_id=USER_POOL_ID,
         cognito_client_id=CLIENT_ID,
         credential_keys={1: SecretStr(TEST_CREDENTIAL_KEY)},
+        audit_hmac_keys={1: SecretStr(TEST_AUDIT_KEY)},
     )
 
 

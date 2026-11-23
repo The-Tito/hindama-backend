@@ -167,6 +167,35 @@ class FindingEventReason(StrEnum):
     OPERATION_RETIRED = "operation_retired"
 
 
+class AuditAction(StrEnum):
+    """Catalog of the audit log (RF-81, RN-09; contract `AuditAction`)."""
+
+    ACCOUNT_CREATED = "account_created"
+    ACCOUNT_DELETED = "account_deleted"  # reserved: there is no account deletion yet
+    PROJECT_CREATED = "project_created"
+    PROJECT_DELETED = "project_deleted"
+    PROJECT_VERIFIED = "project_verified"
+    PROJECT_VERIFICATION_LOST = "project_verification_lost"
+    IDENTITY_CREATED = "identity_created"
+    IDENTITY_DELETED = "identity_deleted"
+    RUN_LAUNCHED = "run_launched"
+    RUN_CANCELLED = "run_cancelled"
+    FINDING_DISMISSED = "finding_dismissed"
+    FINDING_DISMISSAL_REVERTED = "finding_dismissal_reverted"
+    DESTINATION_BLOCKED = "destination_blocked"
+
+
+class BlockStage(StrEnum):
+    """Where the SSRF guard blocked a destination (`destination_blocked`)."""
+
+    PROJECT_URL = "project_url"
+    VERIFICATION = "verification"
+    CONTRACT_IMPORT = "contract_import"
+    IDENTITY_TEST = "identity_test"
+    RESOURCE_DISCOVERY = "resource_discovery"
+    RUN = "run"
+
+
 class DailyMetricName(StrEnum):
     NEW_USERS = "new_users"
     DELETED_ACCOUNTS = "deleted_accounts"

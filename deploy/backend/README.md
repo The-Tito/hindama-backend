@@ -26,6 +26,8 @@ Archivos que la EC2 del backend usa en `/opt/hindama` (arquitectura §2.3 y §3.
 | `/hindama/backend/redis-password` | SecureString | Contraseña de Redis |
 | `/hindama/backend/credential-keys` | SecureString | `{"1":"<32 bytes en base64>"}` (ADR-007) |
 | `/hindama/backend/credential-key-version` | String | `1` |
+| `/hindama/backend/audit-hmac-keys` | SecureString | `{"1":"<32 bytes en base64>"}`, distinta de la de credenciales (ADR-015) |
+| `/hindama/backend/audit-hmac-key-version` | String | `1` |
 | `/hindama/backend/cognito-region` | String | `us-east-1` |
 | `/hindama/backend/cognito-user-pool-id` | String | ID del User Pool |
 | `/hindama/backend/cognito-client-id` | String | ID del cliente de la aplicación |

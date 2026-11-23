@@ -336,6 +336,9 @@ put("/hindama/backend/redis-password", pw(), True)
 put("/hindama/backend/credential-keys",
     json.dumps({"1": base64.b64encode(os.urandom(32)).decode()}, separators=(",", ":")), True)
 put("/hindama/backend/credential-key-version", "1", False)
+put("/hindama/backend/audit-hmac-keys",   # ADR-015: otra llave, nunca la de credenciales
+    json.dumps({"1": base64.b64encode(os.urandom(32)).decode()}, separators=(",", ":")), True)
+put("/hindama/backend/audit-hmac-key-version", "1", False)
 put("/hindama/backend/cognito-region", "us-east-1", False)
 put("/hindama/backend/cognito-user-pool-id", "us-east-1_XXXXXXXXX", False)   # sección 2.3
 put("/hindama/backend/cognito-client-id", "xxxxxxxxxxxxxxxxxxxxxxxxxx", False)
@@ -555,6 +558,7 @@ Con el frontend, ≈ 44 USD al mes.
 - [ ] Cognito: los puntos de la sección 2.6.
 - [ ] Ningún secreto aparece en el repositorio, en un `.env` versionado ni en la salida de la CI.
 - [ ] La llave maestra de credenciales (ADR-007) está en SSM como SecureString (`/hindama/backend/credential-keys`, JSON `{"1":"<32 bytes en base64>"}`), generada en la máquina de un integrante con `os.urandom(32)`, nunca en un chat ni en un correo. Hay una copia fuera de línea junto a la llave privada de los respaldos: sin ella, una base restaurada en la cuenta de respaldo tiene las credenciales ilegibles.
+- [ ] La llave HMAC de la bitácora (ADR-015) está en SSM como SecureString (`/hindama/backend/audit-hmac-keys`), distinta de la de credenciales. Al rotarla se agrega una versión y se conserva la anterior 6 meses (RF-90): sin ella, la búsqueda por host no encuentra los registros viejos.
 - [ ] La red cumple la sección 3.1. En particular, `hindama-sg-db` no tiene reglas de salida y ninguna subred asigna IP pública automática.
 - [ ] RDS: sin acceso público, cifrada, con protección contra borrado. Hay una instantánea manual reciente mientras los respaldos sean de 1 día.
 - [ ] `/hindama/backend-init/db-master-password` **no existe** y el rol `hindama-backend-ec2` solo tiene la política `hindama-backend`.
