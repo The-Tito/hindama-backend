@@ -29,7 +29,7 @@ from hindama.core.errors import (
     UnprocessableError,
 )
 from hindama.core.run_queue import QueueUnavailableError, RunQueue
-from hindama.models import ContractVersion, Run
+from hindama.models import ContractVersion, CreatedResource, Run
 from hindama.models.enums import (
     ACTIVE_RUN_STATUSES,
     CreatedResourceStatus,
@@ -55,6 +55,7 @@ class RunView:
     contract: ContractVersion | None
     findings: dict[Severity, int]
     created_resources: dict[CreatedResourceStatus, int]
+    failed_resources: Sequence[CreatedResource] = ()
 
 
 async def _contract(session: AsyncSession, run: Run) -> ContractVersion | None:
@@ -77,6 +78,7 @@ async def _view(session: AsyncSession, run: Run) -> RunView:
         contract=await _contract(session, run),
         findings=(await repository.findings_by_severity(session, [run.id]))[run.id],
         created_resources=await repository.created_resources(session, run.id),
+        failed_resources=await repository.failed_resources(session, run.id),
     )
 
 

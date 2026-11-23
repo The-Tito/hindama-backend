@@ -140,6 +140,7 @@ def build_lab(mode: Mode) -> FastAPI:
     app.state.catalog_hits = 0  # reset by each run (tests/lab/scanning.py, run_lab)
     app.state.wishlist = {}  # id -> item: empty before and after every run (LAB-API3-03)
     app.state.created = 0
+    app.state.delete_status = None  # a test may make DELETE /wishlist fail (CU-23 E1)
     # Read on every request: a test can fix the lab between two runs (task 4.2, RF-68).
     app.state.mode = mode
     tokens = {BETO_TOKEN: "beto", RAIZ_TOKEN: ADMIN}
@@ -307,6 +308,8 @@ def build_lab(mode: Mode) -> FastAPI:
 
     @app.delete("/wishlist/{item_id}", status_code=204)
     async def remove_wish(item_id: str, name: User) -> Response:
+        if app.state.delete_status is not None:
+            return JSONResponse({"detail": "unavailable"}, status_code=app.state.delete_status)
         item = app.state.wishlist.get(item_id)
         # The owner, or whoever created it: in the vulnerable mode `owner` may say anything.
         if item is None or (app.state.mode == Mode.SECURE and item["owner"] != name):

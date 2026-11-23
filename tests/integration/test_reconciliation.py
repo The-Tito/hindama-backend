@@ -132,7 +132,18 @@ async def test_what_a_dead_run_created_is_reported_not_deleted(
     # RN-06, CU-23 E1: the analyst sees it in the run and deletes it by hand.
     assert (row.status, row.last_error) == ("failed", "run_interrupted")
     body = (await project.analyst.request("GET", f"{project.runs}/{run_id}")).json()
-    assert body["created_resources"] == {"pending": 0, "deleted": 0, "failed": 1}
+    assert body["created_resources"] == {
+        "pending": 0,
+        "deleted": 0,
+        "failed": 1,
+        "failed_items": [
+            {
+                "operation_id": str(operation_id),
+                "location": "/notes/n-1",
+                "last_error": "run_interrupted",
+            }
+        ],
+    }
 
 
 async def test_a_running_run_that_beats_is_left_alone(

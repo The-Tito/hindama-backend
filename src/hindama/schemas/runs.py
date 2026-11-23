@@ -67,10 +67,17 @@ class RunProgress(ContractModel):
     updated_at: datetime
 
 
+class CreatedResourceFailure(ContractModel):
+    operation_id: UUID
+    location: str
+    last_error: str | None
+
+
 class CreatedResourceCount(ContractModel):
     pending: int = Field(ge=0)
     deleted: int = Field(ge=0)
     failed: int = Field(ge=0)
+    failed_items: list[CreatedResourceFailure]
 
 
 class Run(ContractModel):

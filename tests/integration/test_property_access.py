@@ -138,3 +138,38 @@ async def test_a_run_without_budget_to_delete_creates_nothing(
     assert cells[(WISHLIST, "ana")] == ("rejected", "budget_reserved", "skipped")
     assert await created(owner, run_id) == []
     assert ("POST", "/wishlist") not in {(m, p) for m, p, _ in lab.state.seen}
+
+
+async def test_what_it_could_not_delete_is_shown_with_its_path(
+    ana: Analyst,
+    vulnerable_lab: tuple[LocalServer, FastAPI],
+    scanner: Scanner,
+    owner: AsyncEngine,
+) -> None:
+    server, lab = vulnerable_lab
+    project = await lab_project(ana, server, lab)
+    lab.state.delete_status = 500
+    try:
+        run_id = await run_lab(scanner, project, lab, MODULES)
+    finally:
+        lab.state.delete_status = None
+        left = dict(lab.state.wishlist)
+        lab.state.wishlist.clear()
+
+    location = f"/wishlist/wish-{lab.state.created}"
+    assert list(left) == [f"wish-{lab.state.created}"]
+    deletes = [p for m, p, _ in lab.state.seen if m == "DELETE"]
+    assert deletes == [location] * 3  # 3 attempts
+    run = (await ana.request("GET", f"/projects/{project.id}/runs/{run_id}")).json()
+    assert run["created_resources"] == {
+        "pending": 0,
+        "deleted": 0,
+        "failed": 1,
+        "failed_items": [
+            {
+                "operation_id": project.operations[WISHLIST],
+                "location": location,
+                "last_error": "status_500",
+            }
+        ],
+    }  # CU-23 E1: the analyst knows what to delete by hand

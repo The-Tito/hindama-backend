@@ -146,7 +146,12 @@ async def test_launch_a_run(
     assert body["progress"]["percent"] == 0
     assert body["progress"]["cells_planned"] == 0
     assert body["progress"]["findings_by_severity"]["total"] == 0
-    assert body["created_resources"] == {"pending": 0, "deleted": 0, "failed": 0}
+    assert body["created_resources"] == {
+        "pending": 0,
+        "deleted": 0,
+        "failed": 0,
+        "failed_items": [],
+    }
     assert body["started_at"] is None
     assert run_queue.enqueued == [UUID(body["id"])]
     async with await owner_session(owner) as db:

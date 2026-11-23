@@ -8,6 +8,7 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 
 - Módulo de propiedades (API3, RF-58): campos que la respuesta trae sin declararlos y asignación masiva al crear. Solo escribe donde el contrato ofrece el DELETE de lo creado; anota el recurso antes de crearlo y lo borra en la misma celda, también al cancelar (RN-06). Catálogo del laboratorio 1.5.
 - Limpieza de recursos creados (RN-06, CU-23 E1): lo que siga pendiente al terminar, o en una ejecución que la reconciliación da por perdida, queda `failed` con su motivo, a la vista en `created_resources`.
+- Contrato 0.10.0: `created_resources.failed_items` dice la ruta, la operación y el motivo de cada recurso que el analista debe borrar a mano (CU-23 E1).
 - Módulo de inyección SQL (CWE-89, RF-60): pruebas de error y booleana en los parámetros de ruta y de consulta de las operaciones GET, sin escribir ni esperar (RN-06). Catálogo del laboratorio 1.4.
 - Módulo de consumo de recursos (API4, RF-59): ráfaga de hasta 40 peticiones y cuerpos crecientes de hasta 8 MB, sin crear nada en la API del analista (RN-06). Catálogo del laboratorio 1.3.
 - Estadísticas del administrador: `GET /admin/stats` (contrato 0.9.0), con actividad por día o semana y hallazgos por módulo, categoría OWASP y severidad, solo de métricas anónimas (CU-20, RF-78, RF-79, RF-89).
