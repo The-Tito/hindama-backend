@@ -2,9 +2,9 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versiones con [SemVer](https://semver.org/lang/es/). La versión del backend es independiente de la del contrato de la API (`hindama-docs/03-api/openapi.yaml`).
 
-## [Sin publicar]
+## [0.3.0] — 2026-11-23
 
-Implementa el **contrato 0.12.0**: 42 de 42 operaciones.
+Baja de cuenta, exportación a Excel y segundo factor obligatorio para administradores. Implementa el **contrato 0.12.0 completo**: 42 de 42 operaciones, cubiertas por 1 091 pruebas y verificadas con Schemathesis como analista y como administrador.
 
 ### Agregado
 
@@ -16,6 +16,11 @@ Implementa el **contrato 0.12.0**: 42 de 42 operaciones.
 ### Cambiado
 
 - Contrato 0.11.0: `finding_type` garantiza el mismo `title` y es la llave para agrupar hallazgos repetidos (B21). Sin cambio de código: los títulos ya eran constantes de cada comprobación.
+
+### Fuera de esta versión
+
+- Respaldos (CU-24). El reporte imprimible (CU-18) es del frontend.
+- Ejecutar Hindama contra sí misma en AWS (RNF-10).
 
 ## [0.2.0] — 2026-11-23
 
