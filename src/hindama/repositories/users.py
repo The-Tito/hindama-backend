@@ -2,12 +2,13 @@
 
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from hindama.models import User
+from hindama.models import Project, Run, User
 from hindama.models.base import new_id
+from hindama.models.enums import ACTIVE_RUN_STATUSES
 
 
 async def find_id(session: AsyncSession, cognito_sub: str) -> UUID | None:
@@ -46,3 +47,20 @@ async def accept_terms(session: AsyncSession, user_id: UUID, version: str) -> Us
     if user is None:  # pragma: no cover - the caller's row exists (resolve_user)
         raise RuntimeError("user row not found")
     return user
+
+
+async def has_active_run(session: AsyncSession, user_id: UUID) -> bool:
+    """Whether any project of the user has a queued or running run (CU-25 E1)."""
+    statement = select(
+        exists().where(
+            Project.owner_id == user_id,
+            Run.project_id == Project.id,
+            Run.status.in_(ACTIVE_RUN_STATUSES),
+        )
+    )
+    return bool(await session.scalar(statement))
+
+
+async def delete_user(session: AsyncSession, user_id: UUID) -> None:
+    """Deletes the user; its projects and all their content go with it (ON DELETE CASCADE)."""
+    await session.execute(delete(User).where(User.id == user_id))

@@ -171,7 +171,7 @@ class AuditAction(StrEnum):
     """Catalog of the audit log (RF-81, RN-09; contract `AuditAction`)."""
 
     ACCOUNT_CREATED = "account_created"
-    ACCOUNT_DELETED = "account_deleted"  # reserved: there is no account deletion yet
+    ACCOUNT_DELETED = "account_deleted"  # CU-25, RF-88
     PROJECT_CREATED = "project_created"
     PROJECT_DELETED = "project_deleted"
     PROJECT_VERIFIED = "project_verified"
