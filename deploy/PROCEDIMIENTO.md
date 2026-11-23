@@ -521,11 +521,26 @@ El 2026-11-22 respondió 200 con `role: analyst` y `acceptance_required: true`. 
 
 ### 6.8 EC2 del frontend
 
-Pendiente: se crea cuando el frontend tenga conectadas sus vistas. Necesita:
+Creada el 2026-11-23. El paso a paso y la actualización automática están en `deploy/README.md` del repositorio del frontend (`lsprz2773/Hindama-Front`). Lo que se hizo desde la cuenta:
 
-- el rol con `ssm:GetParameter` solo sobre `/hindama/frontend/*`;
-- `HINDAMA_API_URL=https://backend.internal:8443`, una entrada `backend.internal` en `/etc/hosts` hacia la IP privada del backend y `NODE_EXTRA_CA_CERTS` con la raíz de Caddy;
-- su IP elástica agregada a `own-ip-addresses`.
+| Recurso | Valor |
+| --- | --- |
+| EC2 | `hindama-frontend`, `t4g.small`, Amazon Linux 2023 arm64, subred `hindama-publica-a`, SG `hindama-sg-fe`, IMDSv2 obligatorio, disco gp3 de 20 GB cifrado. El *user data* corre `deploy/bootstrap.sh` del frontend |
+| IP elástica | `hindama-frontend-eip`, agregada a `/hindama/backend/own-ip-addresses` (ADR-008) |
+| Dominio | `hindama.asolo.tech`, registro A en Cloudflare **sin proxy**, para que Caddy obtenga el certificado de Let's Encrypt (`python3 deploy/lab/cfdns.py upsert A hindama.asolo.tech <IP>`) |
+| Rol | `hindama-frontend-ec2`: Session Manager y `ssm:GetParameter(s)` solo sobre `/hindama/dev/frontend/*`. Comprobado con el simulador: permite `session-key` y deniega `/hindama/backend/credential-keys` |
+| SSM | `/hindama/dev/frontend/cognito-client-secret` y `/hindama/dev/frontend/session-key` (32 bytes en base64) |
+| Configuración | `/etc/hindama/frontend.conf` (sin secretos) y `/etc/hindama/caddy-root.crt`, la raíz del backend (huella `7C:91:0D:DC:…:1A:5A:C1:D1`) |
+| Actualización | Timer `hindama-frontend-update`: cada 3 minutos despliega el último commit de `dev` si compila y responde, y si no, regresa al anterior |
+
+Comandos útiles, con `deploy/lab/ssm-run.sh hindama-frontend`:
+
+```bash
+echo 'journalctl -u hindama-frontend-update -n 30 --no-pager' | deploy/lab/ssm-run.sh hindama-frontend
+echo 'cat /var/lib/hindama/frontend-deployed' | deploy/lab/ssm-run.sh hindama-frontend
+```
+
+`demo.sh start` y `stop` también encienden y apagan esta EC2. El registro A se conserva: la IP elástica no cambia.
 
 ## 7. Presupuesto y alertas
 

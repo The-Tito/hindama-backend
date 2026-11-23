@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Turns the demo deployment on and off: RDS, the backend and lab EC2s, and the lab's A record.
+# Turns the demo deployment on and off: RDS, the backend, frontend and lab EC2s, and the lab's A
+# record. The frontend keeps its Elastic IP and its A record (hindama.asolo.tech) while stopped.
 #
 #   deploy/lab/demo.sh status          states of everything and the current A record
-#   deploy/lab/demo.sh start           RDS first, then both EC2s, then the A record
+#   deploy/lab/demo.sh start           RDS first, then the EC2s, then the lab's A record
 #   deploy/lab/demo.sh ca FILE         saves the root of the backend's Caddy CA (public certificate)
 #   deploy/lab/demo.sh tunnel          opens the Session Manager tunnel to the backend's 8443
-#   deploy/lab/demo.sh stop            deletes the A record, stops both EC2s and RDS
+#   deploy/lab/demo.sh stop            deletes the lab's A record, stops the EC2s and RDS
 #
 # Resources are found by their Name tag and identifier, never by fixed IDs (PROCEDIMIENTO.md §9).
 set -euo pipefail
@@ -14,6 +15,7 @@ export AWS_PROFILE="${AWS_PROFILE:-hindama}" AWS_REGION="${AWS_REGION:-us-east-1
 DB="${HINDAMA_DB_ID:-hindama-db}"
 BACKEND="${HINDAMA_BACKEND_NAME:-hindama-backend}"
 LAB="${HINDAMA_LAB_NAME:-hindama-lab}"
+FRONTEND="${HINDAMA_FRONTEND_NAME:-hindama-frontend}"
 LAB_HOST="${HINDAMA_LAB_HOST:-lab.asolo.tech}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
@@ -40,7 +42,7 @@ db_status() {
 
 cmd_status() {
   echo "RDS ${DB}: $(db_status)"
-  for name in "$BACKEND" "$LAB"; do
+  for name in "$BACKEND" "$FRONTEND" "$LAB"; do
     local id
     id="$(instance_id "$name")"
     echo "EC2 ${name} (${id}): $(instance_field "$id" State.Name), IP pública $(instance_field "$id" PublicIpAddress)"
@@ -50,8 +52,9 @@ cmd_status() {
 }
 
 cmd_start() {
-  local backend lab status lab_ip
+  local backend frontend lab status lab_ip
   backend="$(instance_id "$BACKEND")"
+  frontend="$(instance_id "$FRONTEND")"
   lab="$(instance_id "$LAB")"
 
   # The lab does not depend on anything: it boots while RDS starts.
@@ -65,30 +68,33 @@ cmd_start() {
   aws rds wait db-instance-available --db-instance-identifier "$DB"
 
   # The backend runs its migrations at boot, so it starts only once the database answers.
-  aws ec2 start-instances --instance-ids "$backend" --query 'StartingInstances[0].CurrentState.Name' --output text
-  aws ec2 wait instance-running --instance-ids "$lab" "$backend"
+  aws ec2 start-instances --instance-ids "$backend" "$frontend" \
+    --query 'StartingInstances[].CurrentState.Name' --output text
+  aws ec2 wait instance-running --instance-ids "$lab" "$backend" "$frontend"
 
   # The lab has no Elastic IP: its public IP changes on every start.
   lab_ip="$(instance_field "$lab" PublicIpAddress)"
   python3 "$HERE/cfdns.py" upsert A "$LAB_HOST" "$lab_ip"
-  echo "Listo. El backend tarda 1 o 2 minutos más en levantar sus contenedores."
+  echo "Listo. El backend y el frontend tardan 1 o 2 minutos más en levantar sus contenedores."
   echo "Siguiente: '$0 ca <archivo>' (una vez) y '$0 tunnel' en otra terminal."
 }
 
 cmd_stop() {
-  local backend lab status
+  local backend frontend lab status
   backend="$(instance_id "$BACKEND")"
+  frontend="$(instance_id "$FRONTEND")"
   lab="$(instance_id "$LAB")"
   # First the A record: a name pointing at a released IP could end up at someone else's machine.
   python3 "$HERE/cfdns.py" delete A "$LAB_HOST"
-  aws ec2 stop-instances --instance-ids "$backend" "$lab" --query 'StoppingInstances[].CurrentState.Name' --output text
+  aws ec2 stop-instances --instance-ids "$backend" "$frontend" "$lab" \
+    --query 'StoppingInstances[].CurrentState.Name' --output text
   status="$(db_status)"
   if [[ "$status" == "available" ]]; then
     aws rds stop-db-instance --db-instance-identifier "$DB" --query DBInstance.DBInstanceStatus --output text
   else
     echo "RDS está en '${status}': no se detuvo. Vuelve a correr 'stop' cuando esté 'available'." >&2
   fi
-  aws ec2 wait instance-stopped --instance-ids "$backend" "$lab"
+  aws ec2 wait instance-stopped --instance-ids "$backend" "$frontend" "$lab"
   echo "Apagado. AWS vuelve a encender RDS sola a los 7 días: detenla otra vez si no se usa."
 }
 
