@@ -9,6 +9,9 @@ and accepts `alg: none`; the secure mode verifies it and requires HS256.
 Configuration (section 2.2): the vulnerable mode sends no security headers, reflects any `Origin`
 with credentials, announces its version and answers a malformed invoice id with its traceback.
 
+SQL injection (version 1.4): `GET /products` and `GET /products/{product_id}` query a real SQLite
+database; the vulnerable mode pastes the value into the SQL text, the secure mode binds it.
+
 Resource consumption (section 2.2, version 1.3): the secure mode answers 429 from the 21st request
 to `GET /catalog` in a run and 413 to a body over 1 MB; the vulnerable mode has no limit.
 """
@@ -18,6 +21,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import sqlite3
 import traceback
 from enum import StrEnum
 from typing import Annotated, Any
@@ -50,6 +54,19 @@ REPORTS = [{"id": "rep-1", "title": "Ventas de noviembre"}]
 CATALOG = [{"sku": "cat-1", "name": "Cuaderno"}, {"sku": "cat-2", "name": "Lápiz"}]
 CATALOG_LIMIT = 20  # requests per run, in the secure mode (LAB-API4-01)
 MAX_BODY = 1_000_000  # bytes, in the secure mode (LAB-API4-02)
+PRODUCTS = [("p1", "Cuaderno rayado", 35), ("p2", "Lápiz del 2", 8), ("p3", "Goma", 5)]
+
+
+def query_products(sql: str, parameters: tuple[str, ...] = ()) -> list[dict[str, object]]:
+    """A fresh in-memory database per request: nothing a request does can change the next one."""
+    database = sqlite3.connect(":memory:")
+    try:
+        database.execute("CREATE TABLE products (id TEXT, name TEXT, price INTEGER)")
+        database.executemany("INSERT INTO products VALUES (?, ?, ?)", PRODUCTS)
+        rows = database.execute(sql, parameters).fetchall()
+    finally:
+        database.close()
+    return [{"id": i, "name": n, "price": p} for i, n, p in rows]
 
 
 def _b64(data: bytes) -> str:
@@ -215,6 +232,37 @@ def build_lab(mode: Mode) -> FastAPI:
     async def create_ticket(body: TicketBody, name: User) -> dict[str, str]:
         # Nothing is kept: a body that is an array never gets here (422), in both modes.
         return {"id": "tkt-1", "title": body.title, "owner": name}
+
+    def products_or_trace(sql: str, parameters: tuple[str, ...]) -> Response:
+        try:
+            return JSONResponse(query_products(sql, parameters))
+        except sqlite3.Error as error:
+            # LAB-SQL-01/02: the same debug handler as LAB-API8-05, with the database's error.
+            return PlainTextResponse("".join(traceback.format_exception(error)), status_code=500)
+
+    @app.get("/products")
+    async def search_products(user_name: User, name: str = "") -> Response:
+        del user_name
+        term = name
+        if app.state.mode == Mode.VULNERABLE:  # LAB-SQL-01: concatenated
+            sql = f"SELECT id, name, price FROM products WHERE name LIKE '%{term}%'"  # noqa: S608
+            return products_or_trace(sql, ())
+        sql = "SELECT id, name, price FROM products WHERE name LIKE '%' || ? || '%'"
+        return products_or_trace(sql, (term,))
+
+    @app.get("/products/{product_id}")
+    async def get_product(product_id: str, user_name: User) -> Response:
+        del user_name
+        if app.state.mode == Mode.VULNERABLE:  # LAB-SQL-02: concatenated
+            sql = f"SELECT id, name, price FROM products WHERE id = '{product_id}'"  # noqa: S608
+            response = products_or_trace(sql, ())
+        else:
+            response = products_or_trace(
+                "SELECT id, name, price FROM products WHERE id = ?", (product_id,)
+            )
+        if response.status_code == 200 and response.body == b"[]":
+            raise HTTPException(status_code=404, detail="not found")
+        return response
 
     @app.get("/admin/users")
     async def list_users(name: User) -> list[dict[str, str]]:
