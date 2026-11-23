@@ -17,7 +17,12 @@ TEXT = Parameter("name", "query", False, "string")
 NUMBER = Parameter("id", "path", True, "integer")
 
 
-def target(method: HttpMethod, path: str, *parameters: Parameter, resources: tuple = ()) -> Target:
+def target(
+    method: HttpMethod,
+    path: str,
+    *parameters: Parameter,
+    resources: tuple[tuple[str, str], ...] = (),
+) -> Target:
     return Target(uuid.uuid4(), method, path, Policy.AUTHENTICATED, resources, parameters)
 
 
