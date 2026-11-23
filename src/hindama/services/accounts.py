@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from hindama.core.auth import CurrentUser, Principal
 from hindama.core.cognito import Profile
-from hindama.core.errors import UnprocessableError
+from hindama.core.errors import ConflictError, FieldIssue, UnprocessableError
 from hindama.models import User
 from hindama.models.enums import AuditAction, DailyMetricName
 from hindama.repositories import audit, metrics, users
@@ -87,3 +87,28 @@ async def accept_terms(
     if row.terms_version != version:
         row = await users.accept_terms(session, user.id, version)
     return _account(user, profile, row, current_version)
+
+
+async def delete_account(
+    session: AsyncSession, user: CurrentUser, profile: Profile, confirmation: str
+) -> None:
+    """CU-25, RF-88: deletes the user and all its projects, and counts it (RF-89).
+
+    Only the database part, in the request's transaction; the caller audits it, commits and then
+    deletes the Cognito account (modelo.md 7.2). The email is compared without case.
+    """
+    if confirmation.casefold() != profile.email.casefold():
+        raise UnprocessableError(
+            "account.confirmation_mismatch",
+            "El correo no coincide",
+            "Escribe el correo de tu cuenta para confirmar que quieres eliminarla.",
+            [FieldIssue("confirmation", "account.confirmation_mismatch", "No coincide.")],
+        )
+    if await users.has_active_run(session, user.id):
+        raise ConflictError(
+            "account.active_run",
+            "Hay una ejecución activa",
+            "Cancela las ejecuciones en curso de tus proyectos antes de eliminar tu cuenta.",
+        )
+    await users.delete_user(session, user.id)
+    await metrics.increment_daily(session, DailyMetricName.DELETED_ACCOUNTS)
