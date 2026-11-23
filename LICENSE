@@ -1,0 +1,38 @@
+Hindama Proprietary License
+
+Copyright (c) 2026 Luis Angel Perez Aguilera and Luis Antonio Selvas de Leon.
+All rights reserved.
+
+1. Ownership. This software, its source code, documentation and related
+   materials (the "Software") are the property of the copyright holders named
+   above. No rights are granted except those expressly stated in this license.
+
+2. Academic evaluation. Permission is granted to the instructor and teaching
+   staff of the course "Seguridad Informatica" (Universidad Politecnica de
+   Chiapas), and to the members of the project team, to view, clone and run the
+   Software locally, for the sole purpose of evaluating and documenting the
+   project.
+
+3. Restrictions. Without prior written permission from the copyright holders,
+   you may not copy, modify, merge, publish, distribute, sublicense or sell the
+   Software, offer it as a hosted service, use it for any commercial purpose, or
+   use it or its source code to build a competing product.
+
+4. Authorized testing only. The Software runs security tests against APIs. It
+   may only be used against APIs that you own or are explicitly authorized to
+   test. Nothing in this license grants such authorization.
+
+5. Third-party components. The Software depends on third-party open source
+   components, which remain under their own licenses. This license does not
+   change those licenses.
+
+6. Future licensing. The copyright holders may at any time license the Software,
+   or any part of it, under different terms, including commercial terms.
+
+7. No warranty. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+   EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
