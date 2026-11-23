@@ -48,6 +48,7 @@ def lab_scanner(
         http_client=http_client,
         events=events or MemoryRunEvents(),
         hasher=TEST_HASHER,
+        recheck_pause_seconds=0,
     )
 
 

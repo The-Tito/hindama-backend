@@ -168,6 +168,7 @@ async def test_a_lost_verification_cancels_the_run(
 
     run = await stored(owner, run_id)
     assert (run.status, run.end_reason) == ("cancelled", "verification_invalid")  # CU-12 E2
+    assert len(checker.calls) == execution.RECHECK_ATTEMPTS  # every attempt said the same
     assert await daily(owner, DailyMetricName.RUNS_CANCELLED) == before + 1  # RF-78
     assert await verification_status(owner, project) == "pending"
     # RF-81: audited with the change, on behalf of the owner, with the host's HMAC.
@@ -221,12 +222,35 @@ async def test_a_run_without_blocks_audits_nothing_from_the_scanner(
     }
 
 
+@pytest.mark.parametrize("hiccup", [Outcome.TXT_MISSING, Outcome.CONNECTION_ERROR])
+async def test_a_passing_hiccup_keeps_the_verification(
+    project: Project,
+    scanner: Scanner,
+    checker: ScriptedChecker,
+    owner: AsyncEngine,
+    hiccup: Outcome,
+) -> None:
+    run_id = await launch(project)
+    # Fails every attempt but the last one: the last answer is the one that counts (RF-20).
+    checker.first[VerificationMethod.DNS] = [CheckResult(hiccup)] * (execution.RECHECK_ATTEMPTS - 1)
+
+    await execute(scanner, run_id, Touches())
+
+    run = await stored(owner, run_id)
+    assert (run.status, run.end_reason) == ("completed", "normal")
+    assert len(checker.calls) == execution.RECHECK_ATTEMPTS
+    assert await verification_status(owner, project) == "verified"
+    assert "project_verification_lost" not in actions(
+        await audit_entries(owner, project_id=project.id)
+    )
+
+
 async def test_an_unreachable_host_fails_the_run_but_keeps_the_verification(
     project: Project, scanner: Scanner, checker: ScriptedChecker, owner: AsyncEngine
 ) -> None:
     run_id = await launch(project)
     checker.results[VerificationMethod.DNS] = CheckResult(Outcome.CONNECTION_ERROR)
-    before = await daily(owner, DailyMetricName.RUNS_FAILED)
+    before = await daily(owner, DailyMetricName.RUNS_FAILED)  # after every attempt
 
     await execute(scanner, run_id, Touches())
 
