@@ -7,10 +7,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from hindama.api.accounts import TermsVersion
-from hindama.api.dependencies import Analyst, DbSession
+from hindama.api.dependencies import Analyst, Audit, DbSession
 from hindama.config import Settings
+from hindama.core.destinations import InvalidUrlError, UrlProblem, parse_base_url
+from hindama.core.errors import UnprocessableError
+from hindama.core.safe_http import BlockReason
 from hindama.models import Run as RunRow
-from hindama.models.enums import EndReason, RunStatus, Severity
+from hindama.models.enums import AuditAction, BlockStage, EndReason, RunStatus, Severity
 from hindama.repositories.projects import Sort
 from hindama.schemas.common import SINGLE_LINE, Warning
 from hindama.schemas.projects import (
@@ -158,18 +161,47 @@ async def create_project(
     response: Response,
     terms_version: TermsVersion,
     destinations: Destinations,
+    audit: Audit,
 ) -> Project:
-    view = await service.create_project(
-        db,
-        user,
-        name=body.name,
-        description=body.description,
-        base_url=body.base_url,
-        terms_version=terms_version,
-        url_policy=destinations,
+    try:
+        view = await service.create_project(
+            db,
+            user,
+            name=body.name,
+            description=body.description,
+            base_url=body.base_url,
+            terms_version=terms_version,
+            url_policy=destinations,
+        )
+    except UnprocessableError as error:
+        await _audit_url_block(audit, error, body.base_url, project_id=None)
+        raise
+    await audit.record(
+        AuditAction.PROJECT_CREATED, project_id=view.project.id, host=view.project.host
     )
     response.headers["Location"] = f"/projects/{view.project.id}"
     return _project(view)
+
+
+async def _audit_url_block(
+    audit: Audit, error: UnprocessableError, base_url: str, project_id: UUID | None
+) -> None:
+    """A base URL that points to a forbidden address is a blocked destination (RF-11, RF-81).
+
+    The request fails with 422, so the entry goes in its own transaction."""
+    if error.code != UrlProblem.DESTINATION_NOT_ALLOWED.value:
+        return
+    try:
+        host = parse_base_url(base_url).host
+    except InvalidUrlError:  # pragma: no cover - the URL parsed before its destination failed
+        return
+    await audit.record_detached(
+        AuditAction.DESTINATION_BLOCKED,
+        project_id=project_id,
+        host=host,
+        stage=BlockStage.PROJECT_URL,
+        block_reason=BlockReason.ADDRESS_NOT_ALLOWED,
+    )
 
 
 @router.get("/projects/{project_id}", operation_id="getProject", summary="Dashboard del proyecto")
@@ -188,9 +220,15 @@ async def update_project(
     _: Analyst,
     db: DbSession,
     destinations: Destinations,
+    audit: Audit,
 ) -> Project:
     changes = body.model_dump(exclude_unset=True)
-    return _project(await service.update_project(db, project_id, changes, destinations))
+    try:
+        return _project(await service.update_project(db, project_id, changes, destinations))
+    except UnprocessableError as error:
+        if "base_url" in changes:
+            await _audit_url_block(audit, error, changes["base_url"], project_id=project_id)
+        raise
 
 
 @router.delete(
@@ -204,6 +242,8 @@ async def delete_project(
     confirmation: Annotated[str, Query(min_length=1, max_length=100, pattern=SINGLE_LINE)],
     _: Analyst,
     db: DbSession,
+    audit: Audit,
 ) -> Response:
-    await service.delete_project(db, project_id, confirmation)
+    host = await service.delete_project(db, project_id, confirmation)
+    await audit.record(AuditAction.PROJECT_DELETED, project_id=project_id, host=host)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

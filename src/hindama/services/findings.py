@@ -136,7 +136,7 @@ async def dismiss(
     justification: str,
 ) -> FindingView:
     """RF-70, RN-09. Only an open finding; a detected-again accepted one stays accepted (ADR-014).
-    The audit log entry of RN-09 arrives with the audit catalog (task 4.3)."""
+    The router audits it (RN-09) in the same transaction."""
     finding = await _locked(session, project_id, finding_id)
     previous = FindingStatus(finding.status)
     if previous not in OPEN_FINDING_STATUSES:

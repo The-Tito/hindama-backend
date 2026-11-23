@@ -6,11 +6,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from hindama.api.dependencies import Analyst, DbSession
+from hindama.api.dependencies import Analyst, Audit, DbSession
 from hindama.api.problems import app_error_response
 from hindama.core.ownership import OwnershipChecker, dns_name, file_url, published_code
 from hindama.models import Project
-from hindama.models.enums import VerificationMethod, VerificationStatus
+from hindama.models.enums import AuditAction, BlockStage, VerificationMethod, VerificationStatus
 from hindama.schemas.verification import (
     DnsInstructions,
     FileInstructions,
@@ -66,9 +66,17 @@ async def verify_ownership(
     _: Analyst,
     db: DbSession,
     checker: Checker,
+    audit: Audit,
 ) -> Verification | JSONResponse:
-    project, failure = await service.verify(db, project_id, body.method, checker)
+    async with audit.blocks(BlockStage.VERIFICATION, project_id):
+        project, failure = await service.verify(db, project_id, body.method, checker)
     if failure is not None:
         # Returned, not raised: the session commits the project back to `pending`.
         return app_error_response(failure)
+    await audit.record(
+        AuditAction.PROJECT_VERIFIED,
+        project_id=project_id,
+        host=project.host,
+        verification_method=body.method,
+    )
     return _verification(project)

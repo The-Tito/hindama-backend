@@ -9,13 +9,17 @@ from hindama.core.auth import CurrentUser, Principal
 from hindama.core.cognito import Profile
 from hindama.core.errors import UnprocessableError
 from hindama.models import User
-from hindama.models.enums import DailyMetricName
-from hindama.repositories import metrics, users
+from hindama.models.enums import AuditAction, DailyMetricName
+from hindama.repositories import audit, metrics, users
+from hindama.repositories.audit import NewEntry
 
 
-async def resolve_user(session: AsyncSession, principal: Principal) -> CurrentUser:
+async def resolve_user(
+    session: AsyncSession, principal: Principal, source_ip: str | None = None
+) -> CurrentUser:
     """Finds the user of the token, registering it on its first access (arquitectura 4.1).
 
+    The registration is audited (`account_created`, RF-81) in the same transaction.
     Needs `app.cognito_sub` already set: the `users` policy only shows the caller's own row.
     """
     user_id = await users.find_id(session, principal.cognito_sub)
@@ -23,6 +27,10 @@ async def resolve_user(session: AsyncSession, principal: Principal) -> CurrentUs
         user_id = await users.create(session, principal.cognito_sub)
         if user_id is not None:
             await metrics.increment_daily(session, DailyMetricName.NEW_USERS)
+            await audit.add(
+                session,
+                NewEntry(AuditAction.ACCOUNT_CREATED, user_id=user_id, source_ip=source_ip),
+            )
         else:  # a concurrent request registered it first
             user_id = await users.find_id(session, principal.cognito_sub)
     if user_id is None:  # pragma: no cover - the row exists after ON CONFLICT

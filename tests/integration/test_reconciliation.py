@@ -27,7 +27,7 @@ from hindama.scanner.config import ScannerSettings
 from hindama.scanner.execution import Scanner, execute
 from hindama.scanner.reconciliation import Reconciliation, purge_audit_log, reconcile
 from hindama.scanner.worker import build_worker
-from tests.conftest import TEST_CREDENTIAL_KEY
+from tests.conftest import TEST_AUDIT_KEY, TEST_CREDENTIAL_KEY
 from tests.events import MemoryRunEvents
 from tests.integration.conftest import SCANNER_URL, Analyst
 from tests.integration.test_runs import Project, new_project, owner_session, start
@@ -250,12 +250,12 @@ async def test_without_redis_only_the_expired_runs_are_reconciled(
 async def test_the_scanner_purges_the_expired_audit_log(
     owner: AsyncEngine, scanner_engine: AsyncEngine
 ) -> None:
-    marker = f"test.reconciliation.{uuid.uuid4()}"
+    marker = uuid.uuid4()  # its project_id: the action must belong to the catalog
     async with owner.begin() as connection:
         await connection.execute(
             text(
-                "INSERT INTO audit_log (action, occurred_at)"
-                " VALUES (:a, now() - interval '7 months')"
+                "INSERT INTO audit_log (action, project_id, occurred_at)"
+                " VALUES ('account_created', :a, now() - interval '7 months')"
             ),
             {"a": marker},
         )
@@ -265,7 +265,9 @@ async def test_the_scanner_purges_the_expired_audit_log(
     assert deleted >= 1
     async with AsyncSession(owner) as db:
         left = await db.scalar(
-            select(func.count()).select_from(AuditLogEntry).where(AuditLogEntry.action == marker)
+            select(func.count())
+            .select_from(AuditLogEntry)
+            .where(AuditLogEntry.project_id == marker)
         )
     assert left == 0
 
@@ -305,6 +307,7 @@ async def test_a_new_worker_fails_the_run_a_dead_scanner_left(
         redis_url=SecretStr(REDIS_URL),
         concurrency=1,
         credential_keys={1: SecretStr(TEST_CREDENTIAL_KEY)},
+        audit_hmac_keys={1: SecretStr(TEST_AUDIT_KEY)},
     )
     worker = build_worker(settings, queue=saq_queue, scanner=scanner)
     running = asyncio.create_task(worker.start())

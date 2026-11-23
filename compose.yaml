@@ -98,6 +98,9 @@ services:
       # Without them the API refuses to start (ADR-007); see .env.example.
       HINDAMA_CREDENTIAL_KEYS: ${HINDAMA_CREDENTIAL_KEYS:-}
       HINDAMA_CREDENTIAL_KEY_VERSION: ${HINDAMA_CREDENTIAL_KEY_VERSION:-1}
+      # The audit log keeps a host's HMAC (ADR-015); without the keys the API refuses to start.
+      HINDAMA_AUDIT_HMAC_KEYS: ${HINDAMA_AUDIT_HMAC_KEYS:-}
+      HINDAMA_AUDIT_HMAC_KEY_VERSION: ${HINDAMA_AUDIT_HMAC_KEY_VERSION:-1}
       # Development only: the mounted source wins over the installed package, for --reload.
       PYTHONPATH: /app/src
     volumes:
@@ -140,6 +143,9 @@ services:
       # Same keys as the API: the scanner decrypts credentials only in memory (RN-11).
       HINDAMA_CREDENTIAL_KEYS: ${HINDAMA_CREDENTIAL_KEYS:-}
       HINDAMA_CREDENTIAL_KEY_VERSION: ${HINDAMA_CREDENTIAL_KEY_VERSION:-1}
+      # The scanner audits blocked destinations and lost verifications (RF-81).
+      HINDAMA_AUDIT_HMAC_KEYS: ${HINDAMA_AUDIT_HMAC_KEYS:-}
+      HINDAMA_AUDIT_HMAC_KEY_VERSION: ${HINDAMA_AUDIT_HMAC_KEY_VERSION:-1}
       PYTHONPATH: /app/src
     volumes:
       - ./src:/app/src:ro

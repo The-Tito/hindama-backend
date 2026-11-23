@@ -8,12 +8,19 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response, status
 
-from hindama.api.dependencies import Analyst, DbSession
+from hindama.api.dependencies import Analyst, Audit, DbSession
 from hindama.api.projects import MAX_PAGE
 from hindama.config import Settings
 from hindama.core.credentials import CredentialCipher
 from hindama.core.identity_probe import IdentityProber
-from hindama.models.enums import AuthType, HttpMethod, IdentityRole, IdentityStatus
+from hindama.models.enums import (
+    AuditAction,
+    AuthType,
+    BlockStage,
+    HttpMethod,
+    IdentityRole,
+    IdentityStatus,
+)
 from hindama.repositories.identities import IdentityRow
 from hindama.schemas.common import Warning
 from hindama.schemas.contracts import OperationRef
@@ -109,6 +116,7 @@ async def create_identity(
     db: DbSession,
     cipher: Cipher,
     response: Response,
+    audit: Audit,
 ) -> Identity:
     row = await service.create_identity(
         db,
@@ -121,6 +129,9 @@ async def create_identity(
         credential=body.credential,
         field_name=body.field_name,
         login_operation_id=body.login_operation_id,
+    )
+    await audit.record(
+        AuditAction.IDENTITY_CREATED, project_id=project_id, identity_id=row.identity.id
     )
     response.headers["Location"] = f"/projects/{project_id}/identities/{row.identity.id}"
     return _identity(row)
@@ -152,9 +163,10 @@ async def update_identity(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_identity(
-    project_id: UUID, identity_id: UUID, user: Analyst, db: DbSession
+    project_id: UUID, identity_id: UUID, user: Analyst, db: DbSession, audit: Audit
 ) -> Response:
     await service.delete_identity(db, user, project_id, identity_id)
+    await audit.record(AuditAction.IDENTITY_DELETED, project_id=project_id, identity_id=identity_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -170,17 +182,19 @@ async def test_identity(
     db: DbSession,
     cipher: Cipher,
     prober: Prober,
+    audit: Audit,
     # Optional body, never JSON `null` (contract): absent means "let the system choose".
     body: Annotated[IdentityTestRequest, Body()] = NO_TEST_PREFERENCE,
 ) -> IdentityTest:
-    outcome = await service.test_identity(
-        db,
-        cipher,
-        prober,
-        project_id,
-        identity_id,
-        body.operation_id,
-    )
+    async with audit.blocks(BlockStage.IDENTITY_TEST, project_id):
+        outcome = await service.test_identity(
+            db,
+            cipher,
+            prober,
+            project_id,
+            identity_id,
+            body.operation_id,
+        )
     operation = outcome.operation
     result = outcome.result
     return IdentityTest(

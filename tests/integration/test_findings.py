@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from hindama.models import Finding, FindingEvent, FindingMetric, FindingOccurrence, Run, User
 from hindama.scanner.execution import Scanner
+from tests.audit import audit_entries
 from tests.integration.conftest import Analyst
 from tests.integration.test_run_results import Matrix, new_matrix
 from tests.integration.test_runs import owner_session
@@ -547,6 +548,25 @@ async def test_accepting_the_risk_of_an_open_finding(seeded: Seeded) -> None:
     assert body == (await seeded.get(f"/{seeded.findings['critico']}")).json()
     still_open = (await seeded.get("?status=new&status=persistent&status=regression")).json()
     assert "critico" not in labels(seeded, still_open)
+
+
+async def test_a_dismissal_and_its_revert_are_audited(seeded: Seeded, owner: AsyncEngine) -> None:
+    """RN-09: the reason and the finding, never the justification (RF-83)."""
+    finding = seeded.findings["critico"]
+    await dismiss(seeded, "critico", reason="false_positive", justification="Texto del analista")
+    await seeded.project.analyst.request("DELETE", dismissal(seeded, "critico"))
+
+    entries = [
+        e
+        for e in await audit_entries(owner, project_id=seeded.project.id)
+        if e.action.startswith("finding_")
+    ]
+
+    assert [(e.action, e.details) for e in entries] == [
+        ("finding_dismissed", {"finding_id": finding, "dismissal_reason": "false_positive"}),
+        ("finding_dismissal_reverted", {"finding_id": finding}),
+    ]
+    assert "Texto del analista" not in repr([e.details for e in entries])
 
 
 @pytest.mark.parametrize("label", ["alto-viejo", "bajo"])  # persistent and new

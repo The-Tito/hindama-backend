@@ -127,6 +127,14 @@ Las credenciales de las identidades de prueba se cifran con AES-256-GCM antes de
 - Genera una llave con `python -c "import base64,os; print(base64.b64encode(os.urandom(32)).decode())"`. En producción viene de SSM Parameter Store (`/hindama/backend/credential-keys`).
 - **Rotar:** agrega la versión nueva, cambia la versión vigente, vuelve a cifrar las filas y después retira la anterior. Perder una llave deja ilegibles las credenciales cifradas con ella; la prueba de una identidad así responde 500 sin detalles.
 
+### Bitácora
+
+La bitácora ([src/hindama/services/audit.py](src/hindama/services/audit.py); RF-81 a RF-84, ADR-015) guarda el HMAC-SHA256 del host de un proyecto, nunca el host:
+
+- `HINDAMA_AUDIT_HMAC_KEYS` y `HINDAMA_AUDIT_HMAC_KEY_VERSION`: mismo formato que las llaves de credenciales, pero con una llave distinta. Sin ellas, la API y el motor no arrancan. En producción vienen de SSM (`/hindama/backend/audit-hmac-keys`).
+- **Rotar:** agrega la versión nueva y cámbiala como vigente. La anterior se conserva mientras haya registros suyos (6 meses, RF-90): la búsqueda por host calcula el HMAC con todas las versiones cargadas.
+- La IP de origen llega del frontend en `X-Hindama-Client-IP`. Solo se guarda si es una IPv4 o IPv6 válida, y nunca autoriza nada.
+
 ### Autenticación
 
 Toda petición, salvo `GET /health` (y `/docs` fuera de producción), necesita `Authorization: Bearer <access token de Cognito>`; si no, responde 401 antes de cualquier otra validación, incluso en rutas que no existen (RF-07). La API valida la firma con las llaves públicas del User Pool (`HINDAMA_COGNITO_REGION`, `HINDAMA_COGNITO_USER_POOL_ID`, `HINDAMA_COGNITO_CLIENT_ID`) y no guarda ningún secreto de Cognito.

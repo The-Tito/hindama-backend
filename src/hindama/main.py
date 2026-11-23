@@ -13,6 +13,7 @@ from fastapi import FastAPI
 
 from hindama.api import (
     accounts,
+    admin,
     contracts,
     findings,
     health,
@@ -116,7 +117,7 @@ def create_app(
 
     app = FastAPI(
         title="Hindama API",
-        version="0.6.0",
+        version="0.7.0",
         lifespan=lifespan,
         # The API is private (only Next.js reaches it); the interactive docs are for development.
         docs_url=None if settings.is_production else "/docs",
@@ -135,6 +136,8 @@ def create_app(
     )
     # AES-256-GCM keys of the identities' credentials (ADR-007): read once, kept only in memory.
     app.state.credential_cipher = settings.credential_cipher()
+    # HMAC keys of the audit log (ADR-015): the log keeps a host's HMAC, never the host (RF-83).
+    app.state.host_hasher = settings.host_hasher()
     app.state.identity_prober = identity_prober
     app.state.run_queue = run_queue
     app.state.run_events = run_events
@@ -161,4 +164,5 @@ def create_app(
     app.include_router(policy.router)
     app.include_router(runs.router)
     app.include_router(findings.router)
+    app.include_router(admin.router)
     return app

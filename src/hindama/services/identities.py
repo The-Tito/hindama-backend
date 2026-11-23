@@ -228,7 +228,7 @@ async def create_identity(
     _seal(cipher, identity, plain)
     session.add(identity)
     await session.flush()
-    # RF-81 (bitácora) is pending: until then, the log keeps the event. Never the credential.
+    # The router audits it (`identity_created`, RF-81). Never the credential.
     log.info("identity_created", project_id=str(project_id), identity_id=str(identity.id))
     return await _row(session, project_id, identity.id)
 

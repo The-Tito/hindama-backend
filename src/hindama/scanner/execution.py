@@ -31,6 +31,7 @@ import structlog
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from hindama.core.audit import BlockCollector, HostHasher, collect_blocks
 from hindama.core.credentials import CredentialCipher
 from hindama.core.ownership import Outcome, OwnershipChecker, published_code
 from hindama.core.run_events import RunEvent, RunEvents
@@ -38,13 +39,17 @@ from hindama.core.run_queue import HEARTBEAT_INTERVAL_SECONDS
 from hindama.core.safe_http import SafeHttpClient
 from hindama.models import Project, Run
 from hindama.models.enums import (
+    AuditAction,
     AuthType,
+    BlockStage,
     EndReason,
     Module,
     RunStatus,
     VerificationMethod,
     VerificationStatus,
 )
+from hindama.repositories import audit as audit_log
+from hindama.repositories.audit import NewEntry
 from hindama.scanner import context as run_context
 from hindama.scanner.evidence import Masker
 from hindama.scanner.limiter import BudgetExhaustedError, RequestLimiter
@@ -57,6 +62,7 @@ from hindama.scanner.progress import Progress
 from hindama.scanner.recorder import Recorder
 from hindama.scanner.requester import Requester
 from hindama.scanner.resolution import resolve_not_detected
+from hindama.services import audit
 from hindama.services.projects import run_modules
 
 log = structlog.get_logger(__name__)
@@ -98,6 +104,7 @@ class Scanner:
     # A client bound to the project's host (ADR-008); tests allow their loopback server.
     http_client: Callable[[str], SafeHttpClient]
     events: RunEvents
+    hasher: HostHasher  # the audit log keeps a host's HMAC, never the host (ADR-015)
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,19 +213,54 @@ async def _beat(scanner: Scanner, run_id: UUID, touch: Touch) -> None:
 
 
 async def _run(scanner: Scanner, run: Run) -> Ending:
-    if not await _still_verified(scanner, run.project_id):
+    # Every destination the SSRF guard blocks is audited (RF-81), whatever ends the run.
+    with collect_blocks() as blocks:
+        try:
+            verified = await _still_verified(scanner, run)
+        finally:
+            await _audit_blocks(scanner, run, blocks, BlockStage.VERIFICATION)
+    if not verified:
         return Ending(RunStatus.CANCELLED, EndReason.VERIFICATION_INVALID)
     limit_seconds = run.config["limits"]["max_duration_minutes"] * SECONDS_PER_MINUTE
-    try:
-        async with asyncio.timeout(limit_seconds):  # RF-47; the job timeout is only a net
-            await _modules(scanner, run)
-    except (TimeoutError, BudgetExhaustedError):  # duration or total requests (CU-12 E5)
-        return Ending(RunStatus.COMPLETED, EndReason.LIMIT_REACHED)
+    with collect_blocks() as blocks:
+        try:
+            async with asyncio.timeout(limit_seconds):  # RF-47; the job timeout is only a net
+                await _modules(scanner, run)
+        except (TimeoutError, BudgetExhaustedError):  # duration or total requests (CU-12 E5)
+            return Ending(RunStatus.COMPLETED, EndReason.LIMIT_REACHED)
+        finally:
+            await _audit_blocks(scanner, run, blocks, BlockStage.RUN)
     return Ending(RunStatus.COMPLETED, EndReason.NORMAL)
 
 
-async def _still_verified(scanner: Scanner, project_id: UUID) -> bool:
+async def _owner(scanner: Scanner, project_id: UUID) -> UUID | None:
+    async with scanner.session_factory() as session:
+        owner: UUID | None = await session.scalar(
+            select(Project.owner_id).where(Project.id == project_id)
+        )
+    return owner
+
+
+async def _audit_blocks(
+    scanner: Scanner, run: Run, blocks: BlockCollector, stage: BlockStage
+) -> None:
+    """One entry per reason and host, on behalf of the project's owner (no browser IP)."""
+    if not blocks.blocks:
+        return
+    await audit.write_blocks(
+        scanner.session_factory,
+        scanner.hasher,
+        blocks,
+        stage,
+        user_id=await _owner(scanner, run.project_id),
+        project_id=run.project_id,
+        run_id=run.id,
+    )
+
+
+async def _still_verified(scanner: Scanner, run: Run) -> bool:
     """RF-20: before sending anything, the code must still be published on the host."""
+    project_id = run.project_id
     async with scanner.session_factory() as session:
         project = await session.get(Project, project_id)
     if (
@@ -250,7 +292,17 @@ async def _still_verified(scanner: Scanner, project_id: UUID) -> bool:
                 verified_at=None,
             )
         )
-    # RF-81 (bitácora) is pending: until then, the log keeps the event.
+        # Audited with the change itself (RF-81): both happen, or neither.
+        await audit_log.add(
+            session,
+            NewEntry(
+                AuditAction.PROJECT_VERIFICATION_LOST,
+                user_id=project.owner_id,
+                project_id=project_id,
+                host=scanner.hasher.digest(project.host),
+                details={"run_id": str(run.id), "verification_method": method.value},
+            ),
+        )
     log.info(
         "project_verification_lost",
         project_id=str(project_id),

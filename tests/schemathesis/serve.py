@@ -2,12 +2,13 @@
 
 Real PostgreSQL (`HINDAMA_TEST_DATABASE_URL`, the API role with RLS); fake Cognito, DNS and run
 queue from the tests. Once the analyst has accepted the terms, writes their access token to the
-token file (the signal that the API is ready) and serves until stopped.
+token file (the signal that the API is ready) and serves until stopped. An administrator's token
+goes to `<token file>.admin`, for the operations of `/admin/*` (a second pass of `run.sh`).
 
-`--cleanup` deletes that analyst, and with them everything Schemathesis created, so the integration
-tests find `hindama_test` clean. It is a separate step because uvicorn re-raises SIGTERM after
-shutting down, which ends the process before any `finally`. The server also runs it on start, in
-case a previous run was killed.
+`--cleanup` deletes that analyst and the administrator, and with them everything Schemathesis
+created, so the integration tests find `hindama_test` clean. It is a separate step because uvicorn
+re-raises SIGTERM after shutting down, which ends the process before any `finally`. The server also
+runs it on start, in case a previous run was killed.
 """
 
 import asyncio
@@ -28,13 +29,15 @@ from tests.dns import FakeResolver
 from tests.events import MemoryRunEvents
 from tests.ownership import ScriptedChecker
 from tests.queue import MemoryRunQueue
-from tests.tokens import FakeUserPool
+from tests.tokens import ADMIN_GROUP, FakeUserPool
 
 # Its own analyst: never the default `sub` of the integration tests.
 SUB = "0192e3a0-5c4e-7000-8000-000000005c4e"
+ADMIN_SUB = "0192e3a0-5c4e-7000-8000-00000000ad31"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("HINDAMA_SCHEMATHESIS_PORT", "8765"))
 TOKEN_FILE = Path(os.environ.get("HINDAMA_SCHEMATHESIS_TOKEN", ".schemathesis-token"))
+ADMIN_TOKEN_FILE = TOKEN_FILE.with_name(TOKEN_FILE.name + ".admin")
 
 
 async def accept_terms(token: str) -> None:
@@ -45,6 +48,12 @@ async def accept_terms(token: str) -> None:
         (await client.post("/me/terms", json={"version": version})).raise_for_status()
 
 
+async def register(token: str) -> None:
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(base_url=f"http://{HOST}:{PORT}", headers=headers) as client:
+        (await client.get("/me")).raise_for_status()
+
+
 async def delete_analyst() -> None:
     url = os.environ.get("HINDAMA_TEST_OWNER_DATABASE_URL")
     if not url:
@@ -52,7 +61,7 @@ async def delete_analyst() -> None:
     engine = create_async_engine(url)
     try:
         async with engine.begin() as connection:
-            await connection.execute(delete(User).where(User.cognito_sub == SUB))
+            await connection.execute(delete(User).where(User.cognito_sub.in_([SUB, ADMIN_SUB])))
     finally:
         await engine.dispose()
 
@@ -82,7 +91,10 @@ async def main() -> None:
             return
         await asyncio.sleep(0.05)
     await accept_terms(token)
-    await asyncio.to_thread(TOKEN_FILE.write_text, token)
+    admin_token = pool.token(sub=ADMIN_SUB, groups=[ADMIN_GROUP])
+    await register(admin_token)  # its first request leaves something in the audit log to list
+    await asyncio.to_thread(ADMIN_TOKEN_FILE.write_text, admin_token)
+    await asyncio.to_thread(TOKEN_FILE.write_text, token)  # last: the signal that all is ready
     await serving
 
 

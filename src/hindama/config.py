@@ -8,7 +8,29 @@ from typing import Literal, Self
 from pydantic import Field, IPvAnyAddress, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from hindama.core.audit import HostHasher
 from hindama.core.credentials import KEY_BYTES, CredentialCipher
+
+
+def _decode_keys(keys: dict[int, SecretStr], version: int, name: str) -> dict[int, bytes]:
+    """Checks a versioned key set ({"1": "<32 bytes in base64>"}) and decodes it.
+
+    Only the version is named in errors: pydantic would otherwise echo the input value.
+    """
+    decoded = {}
+    for number, key in keys.items():
+        if not 1 <= number <= 255:
+            raise ValueError(f"{name} key version {number} must go from 1 to 255")
+        try:
+            raw = base64.b64decode(key.get_secret_value(), validate=True)
+        except binascii.Error:
+            raise ValueError(f"{name} key {number} is not valid base64") from None
+        if len(raw) != KEY_BYTES:
+            raise ValueError(f"{name} key {number} must be {KEY_BYTES} bytes long")
+        decoded[number] = raw
+    if version not in keys:
+        raise ValueError(f"{name}_key_version is not among {name}_keys")
+    return decoded
 
 
 class CredentialKeySettings(BaseSettings):
@@ -25,25 +47,26 @@ class CredentialKeySettings(BaseSettings):
     credential_keys: dict[int, SecretStr] = Field(min_length=1)
     credential_key_version: int = Field(default=1, ge=1, le=255)
 
+    # HMAC-SHA256 keys of the audit log (ADR-015, RF-83), same format: the log stores the HMAC of a
+    # project's host, never the host. New entries use `audit_hmac_key_version`; older versions stay
+    # loaded so the administrator can still search old entries by host (RF-84). In SSM:
+    # /hindama/backend/audit-hmac-keys.
+    audit_hmac_keys: dict[int, SecretStr] = Field(min_length=1)
+    audit_hmac_key_version: int = Field(default=1, ge=1, le=255)
+
     @model_validator(mode="after")
-    def _check_credential_keys(self) -> Self:
-        # Only the version is named in errors: pydantic would otherwise echo the input value.
-        for version, key in self.credential_keys.items():
-            if not 1 <= version <= 255:
-                raise ValueError(f"credential key version {version} must go from 1 to 255")
-            try:
-                raw = base64.b64decode(key.get_secret_value(), validate=True)
-            except binascii.Error:
-                raise ValueError(f"credential key {version} is not valid base64") from None
-            if len(raw) != KEY_BYTES:
-                raise ValueError(f"credential key {version} must be {KEY_BYTES} bytes long")
-        if self.credential_key_version not in self.credential_keys:
-            raise ValueError("credential_key_version is not among credential_keys")
+    def _check_keys(self) -> Self:
+        _decode_keys(self.credential_keys, self.credential_key_version, "credential")
+        _decode_keys(self.audit_hmac_keys, self.audit_hmac_key_version, "audit_hmac")
         return self
 
     def credential_cipher(self) -> CredentialCipher:
-        keys = {v: base64.b64decode(k.get_secret_value()) for v, k in self.credential_keys.items()}
+        keys = _decode_keys(self.credential_keys, self.credential_key_version, "credential")
         return CredentialCipher(keys, self.credential_key_version)
+
+    def host_hasher(self) -> HostHasher:
+        keys = _decode_keys(self.audit_hmac_keys, self.audit_hmac_key_version, "audit_hmac")
+        return HostHasher(keys, self.audit_hmac_key_version)
 
 
 class Settings(CredentialKeySettings):
