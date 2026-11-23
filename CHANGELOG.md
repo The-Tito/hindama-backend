@@ -6,6 +6,7 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 
 ### Agregado
 
+- Estadísticas del administrador: `GET /admin/stats` (contrato 0.9.0), con actividad por día o semana y hallazgos por módulo, categoría OWASP y severidad, solo de métricas anónimas (CU-20, RF-78, RF-79, RF-89).
 - Métricas diarias de ejecuciones: `runs_started` al lanzar o repetir, `runs_cancelled` y `runs_failed` al terminar así (RF-78). Migración `7c4e1a2b9d30`.
 
 ### Cambiado
