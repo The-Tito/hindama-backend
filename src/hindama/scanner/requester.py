@@ -40,6 +40,15 @@ class RequestFailedError(Exception):
     needed it is recorded as `error`, not the whole run."""
 
 
+class OversizedResponseError(RequestFailedError):
+    """The API answered, but with more than the scanner reads. `exchange` keeps the status code,
+    without the body: API4 needs it, because an API that echoes a huge body read all of it."""
+
+    def __init__(self, exchange: Exchange) -> None:
+        super().__init__("response_too_large")
+        self.exchange = exchange
+
+
 class LoginFailedError(Exception):
     """The identity could not log in: its cells are skipped (RF-30)."""
 
@@ -60,18 +69,36 @@ class Requester:
     def sent(self) -> int:
         return self._limiter.sent
 
-    async def send(self, actor: Actor, method: str, path: str) -> Exchange:
-        """Raises `RequestFailedError`, `LoginFailedError` and `BudgetExhaustedError`."""
+    async def send(
+        self,
+        actor: Actor,
+        method: str,
+        path: str,
+        *,
+        content: bytes | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> Exchange:
+        """Raises `RequestFailedError`, `LoginFailedError` and `BudgetExhaustedError`.
+
+        `content` and `headers` (such as its `Content-Type`) go with the identity's credentials.
+        """
         token = await self._token(actor) if actor.auth_type == AuthType.LOGIN else None
-        exchange = await self._send(actor, method, path, token)
+        exchange = await self._send(actor, method, path, token, content, headers)
         if exchange.status_code == 401 and token is not None:
             token = await self._token(actor, stale=token)  # it may have expired (RF-30)
-            exchange = await self._send(actor, method, path, token)
+            exchange = await self._send(actor, method, path, token, content, headers)
         return exchange
 
-    async def send_with(self, headers: Mapping[str, str], method: str, path: str) -> Exchange:
+    async def send_with(
+        self,
+        headers: Mapping[str, str],
+        method: str,
+        path: str,
+        *,
+        content: bytes | None = None,
+    ) -> Exchange:
         """Exactly these credentials, forged or empty (API2): no identity is attached."""
-        return await self._request(method, path, {"Accept": "application/json", **headers})
+        return await self._request(method, path, {"Accept": "application/json", **headers}, content)
 
     async def token(self, actor: Actor) -> str | None:
         """The bearer token the identity sends, logging in if needed; None if it has none."""
@@ -81,14 +108,24 @@ class Requester:
             return actor.credential.token
         return None
 
-    async def _send(self, actor: Actor, method: str, path: str, token: str | None) -> Exchange:
-        headers = {"Accept": "application/json"}
+    async def _send(
+        self,
+        actor: Actor,
+        method: str,
+        path: str,
+        token: str | None,
+        content: bytes | None = None,
+        extra: Mapping[str, str] | None = None,
+    ) -> Exchange:
+        headers = {"Accept": "application/json", **(extra or {})}
         if actor.credential is not None:
             raw = credential_headers(actor.auth_type, actor.credential, actor.field_name, token)
             headers |= {name.decode(): value.decode() for name, value in raw.items()}
-        return await self._request(method, path, headers)
+        return await self._request(method, path, headers, content)
 
-    async def _request(self, method: str, path: str, headers: dict[str, str]) -> Exchange:
+    async def _request(
+        self, method: str, path: str, headers: dict[str, str], content: bytes | None = None
+    ) -> Exchange:
         url = self._base_url + path
         async with self._limiter.slot():
             try:
@@ -96,13 +133,24 @@ class Requester:
                     method,
                     url,
                     headers={k.encode(): v.encode() for k, v in headers.items()},
+                    content=content,
                     follow_redirects=False,
                 )
             except DestinationBlockedError as error:
                 log.warning("scanner_destination_blocked", reason=error.reason.value)
                 raise RequestFailedError(error.reason.value) from None
-            except ResponseTooLargeError:
-                raise RequestFailedError("response_too_large") from None
+            except ResponseTooLargeError as error:
+                raise OversizedResponseError(
+                    Exchange(
+                        method=method,
+                        url=url,
+                        request_headers=headers,
+                        status_code=error.status_code,
+                        response_headers=(),
+                        body=b"",
+                        request_body=content,
+                    )
+                ) from None
             except (NetworkError, InvalidUrl) as error:
                 raise RequestFailedError(type(error).__name__) from None
         return Exchange(
@@ -112,6 +160,7 @@ class Requester:
             status_code=response.status_code,
             response_headers=tuple(response.headers.items()),
             body=response.content,
+            request_body=content,
         )
 
     async def _token(self, actor: Actor, stale: str | None = None) -> str:

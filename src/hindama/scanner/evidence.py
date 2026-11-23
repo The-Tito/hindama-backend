@@ -13,6 +13,7 @@ from typing import Any
 from hindama.models.base import MAX_EVIDENCE_BYTES
 
 MAX_BODY_BYTES = 10 * 1024  # RF-67
+MAX_REQUEST_BODY_BYTES = 1024  # what was sent: its start is enough to reproduce it
 MAX_HEADERS = 50
 MAX_HEADER_VALUE = 500
 MASK = "****"
@@ -37,6 +38,7 @@ class Exchange:
     status_code: int
     response_headers: Iterable[tuple[str, str]]
     body: bytes
+    request_body: bytes | None = None  # only the modules that send one (API4, API3)
 
     def __repr__(self) -> str:
         return f"Exchange({self.method} {self.url} -> {self.status_code})"
@@ -76,12 +78,16 @@ class Masker:
         body_limit = MAX_BODY_BYTES
         while True:
             body = exchange.body[:body_limit]
+            request: dict[str, Any] = {
+                "method": exchange.method,
+                "url": self.text(exchange.url),
+                "headers": self.headers(exchange.request_headers.items()),
+            }
+            if exchange.request_body is not None:
+                sent = exchange.request_body[: min(body_limit, MAX_REQUEST_BODY_BYTES)]
+                request["body"] = self.text(sent.decode("utf-8", errors="replace"))
             evidence = {
-                "request": {
-                    "method": exchange.method,
-                    "url": self.text(exchange.url),
-                    "headers": self.headers(exchange.request_headers.items()),
-                },
+                "request": request,
                 "response": {
                     "status_code": exchange.status_code,
                     "headers": self.headers(exchange.response_headers),
