@@ -12,6 +12,7 @@ Infraestructura de Hindama creada paso a paso, sin Terraform ([ADR-011](../../hi
 | 6 | EC2 del backend y del frontend | Backend listo (2026-11-22); frontend pendiente |
 | 7 | Presupuesto y alertas | Listo (2026-11-22) |
 | 8 | Lista de verificación final | En construcción |
+| 9 | Laboratorio y demo: encender, probar y apagar | Listo (2026-11-23); scripts sin ejecutar en AWS |
 
 ## 1. Antes de empezar
 
@@ -566,3 +567,81 @@ Con el frontend, ≈ 44 USD al mes.
 - [ ] La EC2 no tiene par de llaves, tiene IMDSv2 obligatorio con `hop limit = 1`, y `hindama-sg-be` solo admite el 8443 desde `hindama-sg-fe`.
 - [ ] `own-ip-addresses` contiene todas las IP elásticas de la plataforma.
 - [ ] Existe `hindama-mensual` en AWS Budgets, con los créditos excluidos.
+
+## 9. Laboratorio y demo
+
+La plataforma desplegada pasa la mayor parte del tiempo **apagada**: apagada cuesta unos 0.30 USD al día, y encendida, cerca de 32 USD al mes. Para la demo se encienden tres cosas: RDS `hindama-db`, la EC2 `hindama-backend` y la EC2 `hindama-lab`, que corre el laboratorio del catálogo en modo vulnerable. Los scripts están en [`lab/`](lab/README.md) y encuentran cada recurso por su etiqueta `Name`.
+
+### 9.1 Qué es el laboratorio
+
+| Campo | Valor | Por qué |
+| --- | --- | --- |
+| Instancia | `hindama-lab`, t4g.micro, Amazon Linux 2023 arm64, sin par de llaves, IMDSv2 con `hop limit = 1`, disco gp3 de 8 GB cifrado | Basta para la mini API del catálogo. |
+| Aplicación | `tests/lab/app.py` de un commit fijo, en un contenedor sin privilegios, de solo lectura, sin capacidades y con 512 MB | Es código vulnerable a propósito: no debe poder hacer nada más. |
+| Red | `hindama-sg-lab`: solo el puerto 80 y solo desde la IP elástica del backend | Nadie más en internet llega al laboratorio. |
+| Rol | `hindama-lab-ec2`: solo Session Manager | Sin acceso a parámetros ni a logs. |
+| Nombre | `lab.asolo.tech`, registro A sin proxy de Cloudflare | Su IP pública cambia en cada arranque: el registro se crea al encender y **se borra al apagar**, para que no apunte a una IP que AWS ya dio a otra persona. |
+| Verificación | Los TXT `_hindama-verificacion.lab.asolo.tech` de proyectos anteriores se conservan | Así los proyectos de la demo siguen verificados al reverificarse (RF-20). |
+
+Ya existe. Para reconstruirlo en otra cuenta: `LAB_REF=<SHA completo> deploy/lab/create-lab.sh`.
+
+### 9.2 Encender para la demo
+
+Desde `hindama-backend`, con el perfil `hindama` (sección 1). Hazlo **al menos 20 minutos antes**: RDS tarda en arrancar.
+
+1. **Revisa los parámetros de la bitácora.** Si `/hindama/backend/image-tag` apunta a una imagen con la bitácora (RF-81), deben existir `/hindama/backend/audit-hmac-keys` y `/hindama/backend/audit-hmac-key-version` (sección 5). Sin ellos, la API y el motor no arrancan.
+2. **Enciende todo:**
+
+   ```bash
+   deploy/lab/demo.sh start    # RDS, luego las dos EC2, luego el registro A de lab
+   deploy/lab/demo.sh status
+   ```
+
+   El backend espera a RDS porque corre las migraciones al arrancar. Después de `start`, sus contenedores tardan 1 o 2 minutos más.
+3. **Prepara una carpeta fuera del repositorio** para el token y la raíz de Caddy:
+
+   ```bash
+   install -d -m 0700 ~/.hindama-demo
+   deploy/lab/demo.sh ca ~/.hindama-demo/caddy-root.crt   # imprime su huella SHA-256
+   ```
+
+   La raíz no cambia entre arranques porque vive en el volumen `caddy-data`. Basta con descargarla una vez.
+4. **Abre el túnel** en otra terminal y déjala abierta: `deploy/lab/demo.sh tunnel`. Si no abre el puerto, cierra sesiones viejas con `pkill -f session-manager-plugin` y vuelve a intentarlo.
+5. **Comprueba la API** con una cuenta del pool `hindama-dev`. El token dura una hora:
+
+   ```bash
+   set -a; . ./.env; set +a
+   (umask 077; deploy/cognito/get-dev-token.sh <correo> > ~/.hindama-demo/token)
+   curl --cacert ~/.hindama-demo/caddy-root.crt --resolve backend.internal:8443:127.0.0.1 \
+     -H "Authorization: Bearer $(cat ~/.hindama-demo/token)" https://backend.internal:8443/me
+   ```
+
+   Debe responder 200 con tu rol.
+
+### 9.3 Prueba de punta a punta
+
+Con el túnel abierto, `e2e.py` hace lo que haría una persona analista: crea un proyecto sobre `http://lab.asolo.tech`, importa su contrato, define las políticas, las tres identidades y sus recursos, publica el TXT, verifica el proyecto, lanza todos los módulos disponibles e imprime los hallazgos y los tiempos de la API.
+
+```bash
+PYTHONPATH=. \
+HINDAMA_E2E_TOKEN_FILE=~/.hindama-demo/token \
+HINDAMA_E2E_CA_FILE=~/.hindama-demo/caddy-root.crt \
+uv run python deploy/lab/e2e.py        # un proyecto; con 10 es la prueba de carga (RNF-04)
+```
+
+- Cada corrida crea proyectos nuevos («Laboratorio AWS n») y deja sus TXT en Cloudflare.
+- La verificación espera hasta 3 minutos: un TXT recién creado tarda en verse.
+- El límite de 100 peticiones por minuto (RNF-09) frena la preparación de muchos proyectos. El script espera lo que indique `Retry-After`.
+
+Para verificar a mano un proyecto creado desde el frontend, publica su TXT con `python3 deploy/lab/cfdns.py upsert TXT <nombre> <valor>`, espera un minuto y pulsa «Verificar».
+
+### 9.4 Apagar
+
+```bash
+deploy/lab/demo.sh stop    # borra el registro A, detiene las dos EC2 y RDS
+deploy/lab/inventory.sh    # confirma que no quedó nada encendido en ninguna región
+```
+
+- Si RDS no estaba `available` (por ejemplo, aún arrancando), `stop` avisa y no la detiene: vuelve a correrlo.
+- **AWS vuelve a encender RDS sola a los 7 días.** Si no se va a usar, detenla otra vez con `demo.sh stop`.
+- La IP elástica del backend se cobra aunque esté apagada. Es a propósito: es la IP de salida que conoce `hindama-sg-lab` y `own-ip-addresses` (ADR-008).
