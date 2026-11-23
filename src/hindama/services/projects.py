@@ -54,7 +54,13 @@ REQUIREMENTS = (
 # The modules the scanner has (`scanner/execution.py`, MODULES; a test keeps both equal). The rest
 # report `not_implemented` (contract 0.8.0) instead of planning zero cells in silence (RF-45).
 IMPLEMENTED_MODULES = frozenset(
-    {Module.AUTHENTICATION, Module.CONFIGURATION, Module.OBJECT_ACCESS, Module.FUNCTION_ACCESS}
+    {
+        Module.AUTHENTICATION,
+        Module.CONFIGURATION,
+        Module.OBJECT_ACCESS,
+        Module.FUNCTION_ACCESS,
+        Module.RESOURCE_CONSUMPTION,
+    }
 )
 
 _URL_MESSAGES = {
