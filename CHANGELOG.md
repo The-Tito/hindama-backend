@@ -4,6 +4,10 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 
 ## [Sin publicar]
 
+### Agregado
+
+- Métricas diarias de ejecuciones: `runs_started` al lanzar o repetir, `runs_cancelled` y `runs_failed` al terminar así (RF-78). Migración `7c4e1a2b9d30`.
+
 ### Cambiado
 
 - Contrato 0.8.0: los módulos que el motor todavía no tiene (`property_access`, `resource_consumption`, `sql_injection`) informan `not_implemented` en `modules[].missing` y lanzarlos responde `run.module_unavailable`, en lugar de planear 0 celdas en silencio (RF-45).
