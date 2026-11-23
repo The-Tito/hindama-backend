@@ -100,6 +100,19 @@ async def created_resources(
     return {status: counts.get(status, 0) for status in CreatedResourceStatus}
 
 
+async def failed_resources(session: AsyncSession, run_id: UUID) -> list[CreatedResource]:
+    """What the analyst must delete by hand (CU-23 E1), in the order it was created."""
+    rows = await session.scalars(
+        select(CreatedResource)
+        .where(
+            CreatedResource.run_id == run_id,
+            CreatedResource.status == CreatedResourceStatus.FAILED,
+        )
+        .order_by(CreatedResource.created_at, CreatedResource.id)
+    )
+    return list(rows)
+
+
 # A cell of the matrix with its operation (None in API-wide checks) and identity.
 type Cell = tuple[Result, Operation | None, Identity]
 

@@ -30,6 +30,7 @@ from hindama.schemas.contracts import OperationRef
 from hindama.schemas.projects import ContractVersionSummary
 from hindama.schemas.runs import (
     CreatedResourceCount,
+    CreatedResourceFailure,
     IdentityRef,
     Result,
     ResultPage,
@@ -96,6 +97,12 @@ def _run(view: RunView) -> Run:
             pending=counts[CreatedResourceStatus.PENDING],
             deleted=counts[CreatedResourceStatus.DELETED],
             failed=counts[CreatedResourceStatus.FAILED],
+            failed_items=[
+                CreatedResourceFailure(
+                    operation_id=row.operation_id, location=row.location, last_error=row.last_error
+                )
+                for row in view.failed_resources
+            ],
         ),
         cancel_requested_at=run.cancel_requested_at,
         created_at=run.created_at,
