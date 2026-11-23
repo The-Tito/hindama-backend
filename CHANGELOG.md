@@ -2,7 +2,9 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versiones con [SemVer](https://semver.org/lang/es/). La versión del backend es independiente de la del contrato de la API (`hindama-docs/03-api/openapi.yaml`).
 
-## [Sin publicar]
+## [0.2.0] — 2026-11-23
+
+Los **siete módulos de prueba** (F-09) y las estadísticas del administrador. Implementa el **contrato 0.10.0 completo**: 40 de 40 operaciones, cubiertas por 1 044 pruebas y verificadas con Schemathesis como analista y como administrador. El catálogo del laboratorio (1.5) fija lo que cada módulo debe encontrar y lo que no.
 
 ### Agregado
 
@@ -17,7 +19,12 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 ### Cambiado
 
 - La verificación al iniciar una ejecución se repite hasta 3 veces, con 2 s de pausa, antes de quitarle la verificación al proyecto: un fallo pasajero del DNS ya no la hace perder (RF-20).
-- Contrato 0.8.0: los módulos que el motor todavía no tiene (`property_access`, `resource_consumption`, `sql_injection`) informan `not_implemented` en `modules[].missing` y lanzarlos responde `run.module_unavailable`, en lugar de planear 0 celdas en silencio (RF-45).
+- Contrato 0.8.0: un módulo que el motor no tiene informa `not_implemented` en `modules[].missing` y lanzarlo responde `run.module_unavailable`, en lugar de planear 0 celdas en silencio (RF-45). Desde esta versión no hay ninguno; la regla queda para módulos futuros.
+
+### Fuera de esta versión
+
+- Reportes y exportación a Excel (CU-18, CU-19), baja de cuenta (CU-25), respaldos (CU-24) y 2FA TOTP (CU-22).
+- Ejecutar Hindama contra sí misma en AWS.
 
 ## [0.1.0] — 2026-11-23
 
@@ -85,4 +92,5 @@ Primera versión entregable. Implementa el **contrato 0.7.0 completo**: 39 de 39
 - **Funcionalidades:** reportes y exportación a Excel (CU-18, CU-19), estadísticas del administrador (CU-20), baja de cuenta (CU-25), respaldos (CU-24) y 2FA TOTP (CU-22).
 - **Ejecutar Hindama contra sí misma:** se hará después de esta versión.
 
+[0.2.0]: https://github.com/The-Tito/hindama-backend/releases/tag/v0.2.0
 [0.1.0]: https://github.com/The-Tito/hindama-backend/releases/tag/v0.1.0
