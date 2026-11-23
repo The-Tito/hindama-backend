@@ -1,12 +1,15 @@
 """Resources of a project: objects of the analyst's API and their owner identity (modelo.md 3.3;
 RF-35 to RF-38). Runs as `hindama_api` with Row-Level Security (RN-02)."""
 
+from collections.abc import Iterable
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from hindama.models import Resource
+from hindama.models import Identity, Operation, OperationVersion, Resource
+from hindama.models.enums import AuthType, HttpMethod
+from hindama.repositories.identities import latest_description
 
 
 async def page(
@@ -59,3 +62,53 @@ async def owner_of(
         )
     )
     return resource
+
+
+async def owners(
+    session: AsyncSession, project_id: UUID, resource_types: Iterable[str]
+) -> dict[tuple[str, str], UUID]:
+    """Who owns each object of these types: `(type, identifier)` → identity."""
+    types = sorted(set(resource_types))
+    if not types:
+        return {}
+    statement = select(Resource.resource_type, Resource.value, Resource.identity_id).where(
+        Resource.project_id == project_id, Resource.resource_type.in_(types)
+    )
+    return {(row[0], row[1]): row[2] for row in await session.execute(statement)}
+
+
+async def searchers(session: AsyncSession, project_id: UUID) -> list[Identity]:
+    """Live identities with a credential, by creation: the ones that discover (RF-36)."""
+    statement = (
+        select(Identity)
+        .where(
+            Identity.project_id == project_id,
+            Identity.deleted_at.is_(None),
+            Identity.auth_type != AuthType.NONE,
+        )
+        .order_by(Identity.created_at, Identity.id)
+    )
+    return list(await session.scalars(statement))
+
+
+async def get_operations_without_parameters(
+    session: AsyncSession, project_id: UUID
+) -> list[tuple[Operation, OperationVersion, UUID]]:
+    """Current GET operations without path parameters, each with its newest description and the
+    contract version it comes from, by path: the candidates to list resources (RF-36)."""
+    operations = await session.scalars(
+        select(Operation)
+        .where(
+            Operation.project_id == project_id,
+            Operation.retired_at.is_(None),
+            Operation.method == HttpMethod.GET,
+            ~Operation.normalized_path.contains("{"),
+        )
+        .order_by(Operation.path, Operation.id)
+    )
+    result = []
+    for operation in list(operations):
+        described = await latest_description(session, project_id, operation.id)
+        if described is not None:
+            result.append((operation, described[0], described[1]))
+    return result
