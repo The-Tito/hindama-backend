@@ -1,4 +1,5 @@
-"""`/projects/{project_id}/findings` (CU-15, CU-16; RF-62, RF-65, RF-66, RF-70, RF-72, RN-09)."""
+"""`/projects/{project_id}/findings` (CU-15, CU-16, CU-19; RF-62, RF-65, RF-66, RF-70, RF-72, RF-77,
+RN-09)."""
 
 from typing import Annotated, Any
 from uuid import UUID
@@ -34,6 +35,7 @@ from hindama.schemas.findings import (
     FindingSummary,
     RunRef,
 )
+from hindama.services import finding_export
 from hindama.services import findings as service
 
 router = APIRouter(tags=["Findings"])
@@ -181,6 +183,64 @@ async def list_findings(
     )
     return FindingPage(
         items=[_summary(row) for row in rows], total=total, page=page, page_size=page_size
+    )
+
+
+# Declared before `getFinding`: both are GET only, so the order is enough and a malformed
+# `finding_id` keeps its 422 (a `:uuid` converter would turn it into a 404).
+@router.get(
+    "/projects/{project_id}/findings/export",
+    operation_id="exportFindings",
+    summary="Exportar hallazgos a Excel",
+    response_class=Response,
+    responses={
+        200: {
+            "description": "El libro de Excel.",
+            "content": {
+                finding_export.MEDIA_TYPE: {
+                    "schema": {"type": "string", "contentEncoding": "binary"}
+                }
+            },
+        }
+    },
+)
+async def export_findings(
+    project_id: UUID,
+    _: Analyst,
+    db: DbSession,
+    modules: Annotated[
+        list[Module],
+        AfterValidator(unique),
+        Query(alias="module", json_schema_extra={"uniqueItems": True}),
+    ] = [],  # noqa: B006 - FastAPI copies the default; a query list is never shared
+    severities: Annotated[
+        list[Severity],
+        AfterValidator(unique),
+        Query(alias="severity", json_schema_extra={"uniqueItems": True}),
+    ] = [],  # noqa: B006
+    statuses: Annotated[
+        list[FindingStatus],
+        AfterValidator(unique),
+        Query(alias="status", json_schema_extra={"uniqueItems": True}),
+    ] = [],  # noqa: B006
+    run_id: UUID | None = None,
+    identity_id: UUID | None = None,
+    operation_id: UUID | None = None,
+) -> Response:
+    rows = await service.export_findings(
+        db,
+        project_id,
+        modules=modules,
+        severities=severities,
+        statuses=statuses,
+        run_id=run_id,
+        identity_id=identity_id,
+        operation_id=operation_id,
+    )
+    return Response(
+        content=finding_export.workbook(rows),
+        media_type=finding_export.MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{finding_export.FILENAME}"'},
     )
 
 
