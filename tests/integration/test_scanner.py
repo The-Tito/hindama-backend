@@ -29,7 +29,7 @@ from hindama.core.run_queue import SaqRunQueue
 from hindama.core.safe_http import SafeHttpClient
 from hindama.models import Project as ProjectRow
 from hindama.models import Result, Run
-from hindama.models.enums import VerificationMethod
+from hindama.models.enums import DailyMetricName, VerificationMethod
 from hindama.scanner import execution
 from hindama.scanner.config import ScannerSettings
 from hindama.scanner.execution import Scanner, execute
@@ -39,7 +39,14 @@ from tests.audit import actions, audit_entries
 from tests.conftest import TEST_AUDIT_KEY, TEST_CREDENTIAL_KEY, TEST_HASHER
 from tests.events import MemoryRunEvents
 from tests.integration.conftest import SCANNER_URL, Analyst
-from tests.integration.test_runs import Project, finish, new_project, owner_session, sse_events
+from tests.integration.test_runs import (
+    Project,
+    daily,
+    finish,
+    new_project,
+    owner_session,
+    sse_events,
+)
 from tests.lab.scanning import lab_project, lab_scanner
 from tests.ownership import ScriptedChecker
 from tests.servers import LocalServer, ScriptedResolver
@@ -108,11 +115,15 @@ async def test_a_run_goes_from_queued_to_completed(
     project: Project, scanner: Scanner, checker: ScriptedChecker, owner: AsyncEngine
 ) -> None:
     run_id = await launch(project)
+    endings = (DailyMetricName.RUNS_CANCELLED, DailyMetricName.RUNS_FAILED)
+    ended = [await daily(owner, metric) for metric in endings]
 
     await execute(scanner, run_id, Touches())
 
     run = await stored(owner, run_id)
     assert (run.status, run.end_reason) == ("completed", "normal")
+    # Only `runs_started` counts a completed run (RF-78).
+    assert [await daily(owner, metric) for metric in endings] == ended
     assert run.started_at is not None
     assert run.finished_at is not None
     assert run.started_at <= run.finished_at
@@ -151,11 +162,14 @@ async def test_a_lost_verification_cancels_the_run(
 ) -> None:
     run_id = await launch(project)
     checker.results[VerificationMethod.DNS] = CheckResult(outcome)
+    before = await daily(owner, DailyMetricName.RUNS_CANCELLED)
 
     await execute(scanner, run_id, Touches())
 
     run = await stored(owner, run_id)
     assert (run.status, run.end_reason) == ("cancelled", "verification_invalid")  # CU-12 E2
+    assert len(checker.calls) == execution.RECHECK_ATTEMPTS  # every attempt said the same
+    assert await daily(owner, DailyMetricName.RUNS_CANCELLED) == before + 1  # RF-78
     assert await verification_status(owner, project) == "pending"
     # RF-81: audited with the change, on behalf of the owner, with the host's HMAC.
     (lost,) = [
@@ -208,16 +222,41 @@ async def test_a_run_without_blocks_audits_nothing_from_the_scanner(
     }
 
 
+@pytest.mark.parametrize("hiccup", [Outcome.TXT_MISSING, Outcome.CONNECTION_ERROR])
+async def test_a_passing_hiccup_keeps_the_verification(
+    project: Project,
+    scanner: Scanner,
+    checker: ScriptedChecker,
+    owner: AsyncEngine,
+    hiccup: Outcome,
+) -> None:
+    run_id = await launch(project)
+    # Fails every attempt but the last one: the last answer is the one that counts (RF-20).
+    checker.first[VerificationMethod.DNS] = [CheckResult(hiccup)] * (execution.RECHECK_ATTEMPTS - 1)
+
+    await execute(scanner, run_id, Touches())
+
+    run = await stored(owner, run_id)
+    assert (run.status, run.end_reason) == ("completed", "normal")
+    assert len(checker.calls) == execution.RECHECK_ATTEMPTS
+    assert await verification_status(owner, project) == "verified"
+    assert "project_verification_lost" not in actions(
+        await audit_entries(owner, project_id=project.id)
+    )
+
+
 async def test_an_unreachable_host_fails_the_run_but_keeps_the_verification(
     project: Project, scanner: Scanner, checker: ScriptedChecker, owner: AsyncEngine
 ) -> None:
     run_id = await launch(project)
     checker.results[VerificationMethod.DNS] = CheckResult(Outcome.CONNECTION_ERROR)
+    before = await daily(owner, DailyMetricName.RUNS_FAILED)  # after every attempt
 
     await execute(scanner, run_id, Touches())
 
     run = await stored(owner, run_id)
     assert (run.status, run.end_reason) == ("failed", "error")
+    assert await daily(owner, DailyMetricName.RUNS_FAILED) == before + 1  # RF-78
     assert await verification_status(owner, project) == "verified"
 
 

@@ -177,3 +177,11 @@ def test_the_judgement(status: int, body: bytes, word: str) -> None:
 def test_metrics_keep_only_the_monday() -> None:
     assert _monday(dt.date(2026, 11, 19)) == dt.date(2026, 11, 16)
     assert _monday(dt.date(2026, 11, 16)) == dt.date(2026, 11, 16)
+
+
+def test_the_dashboard_and_the_scanner_agree_on_the_implemented_modules() -> None:
+    """RF-45: a module the scanner lacks is `not_implemented`, never a run of zero cells."""
+    from hindama.scanner.execution import MODULES
+    from hindama.services.projects import IMPLEMENTED_MODULES
+
+    assert set(MODULES) == IMPLEMENTED_MODULES

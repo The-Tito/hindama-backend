@@ -26,6 +26,10 @@ class RequestLimiter:
         self._next_at = 0.0
         self.sent = 0
 
+    @property
+    def remaining(self) -> int:
+        return max(self._max_requests - self.sent, 0)
+
     @contextlib.asynccontextmanager
     async def slot(self) -> AsyncIterator[None]:
         """Waits for a free slot and for the request's turn; raises `BudgetExhaustedError`."""

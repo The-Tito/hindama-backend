@@ -201,3 +201,5 @@ class DailyMetricName(StrEnum):
     DELETED_ACCOUNTS = "deleted_accounts"
     PROJECTS_CREATED = "projects_created"
     RUNS_STARTED = "runs_started"
+    RUNS_CANCELLED = "runs_cancelled"
+    RUNS_FAILED = "runs_failed"

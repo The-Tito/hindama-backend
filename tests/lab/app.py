@@ -8,6 +8,16 @@ and accepts `alg: none`; the secure mode verifies it and requires HS256.
 
 Configuration (section 2.2): the vulnerable mode sends no security headers, reflects any `Origin`
 with credentials, announces its version and answers a malformed invoice id with its traceback.
+
+Property access (version 1.5): the vulnerable mode answers `GET /profile` with fields its schema
+does not declare, and keeps every field of a `POST /wishlist` body, `owner` included. The wish list
+starts empty and must end empty: what Hindama creates, Hindama deletes (RN-06).
+
+SQL injection (version 1.4): `GET /products` and `GET /products/{product_id}` query a real SQLite
+database; the vulnerable mode pastes the value into the SQL text, the secure mode binds it.
+
+Resource consumption (section 2.2, version 1.3): the secure mode answers 429 from the 21st request
+to `GET /catalog` in a run and 413 to a body over 1 MB; the vulnerable mode has no limit.
 """
 
 import base64
@@ -15,6 +25,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import sqlite3
 import traceback
 from enum import StrEnum
 from typing import Annotated, Any
@@ -44,6 +55,22 @@ ACCOUNTS = {
     "acc-beto": {"id": "acc-beto", "owner": "beto", "balance": 1200},
 }
 REPORTS = [{"id": "rep-1", "title": "Ventas de noviembre"}]
+CATALOG = [{"sku": "cat-1", "name": "Cuaderno"}, {"sku": "cat-2", "name": "Lápiz"}]
+CATALOG_LIMIT = 20  # requests per run, in the secure mode (LAB-API4-01)
+MAX_BODY = 1_000_000  # bytes, in the secure mode (LAB-API4-02)
+PRODUCTS = [("p1", "Cuaderno rayado", 35), ("p2", "Lápiz del 2", 8), ("p3", "Goma", 5)]
+
+
+def query_products(sql: str, parameters: tuple[str, ...] = ()) -> list[dict[str, object]]:
+    """A fresh in-memory database per request: nothing a request does can change the next one."""
+    database = sqlite3.connect(":memory:")
+    try:
+        database.execute("CREATE TABLE products (id TEXT, name TEXT, price INTEGER)")
+        database.executemany("INSERT INTO products VALUES (?, ?, ?)", PRODUCTS)
+        rows = database.execute(sql, parameters).fetchall()
+    finally:
+        database.close()
+    return [{"id": i, "name": n, "price": p} for i, n, p in rows]
 
 
 def _b64(data: bytes) -> str:
@@ -88,9 +115,32 @@ class LoginBody(BaseModel):
     password: str
 
 
+class TicketBody(BaseModel):
+    title: str
+
+
+class Profile(BaseModel):
+    name: str
+    email: str
+
+
+class WishIn(BaseModel):
+    product: str
+
+
+class WishOut(BaseModel):
+    id: str
+    product: str
+    owner: str
+
+
 def build_lab(mode: Mode) -> FastAPI:
-    app = FastAPI(title="Mini API del laboratorio", version="1.2")
+    app = FastAPI(title="Mini API del laboratorio", version="1.3")
     app.state.seen = []  # (method, path, user): what Hindama sent, for the tests
+    app.state.catalog_hits = 0  # reset by each run (tests/lab/scanning.py, run_lab)
+    app.state.wishlist = {}  # id -> item: empty before and after every run (LAB-API3-03)
+    app.state.created = 0
+    app.state.delete_status = None  # a test may make DELETE /wishlist fail (CU-23 E1)
     # Read on every request: a test can fix the lab between two runs (task 4.2, RF-68).
     app.state.mode = mode
     tokens = {BETO_TOKEN: "beto", RAIZ_TOKEN: ADMIN}
@@ -99,7 +149,11 @@ def build_lab(mode: Mode) -> FastAPI:
 
     @app.middleware("http")
     async def record(request: Request, call_next):  # type: ignore[no-untyped-def]
-        response = await call_next(request)
+        length = int(request.headers.get("content-length") or 0)
+        if app.state.mode == Mode.SECURE and length > MAX_BODY:  # before reading it
+            response = JSONResponse({"detail": "payload too large"}, status_code=413)
+        else:
+            response = await call_next(request)
         app.state.seen.append(
             (request.method, request.url.path, request.state.__dict__.get("user"))
         )
@@ -186,6 +240,82 @@ def build_lab(mode: Mode) -> FastAPI:
         if app.state.mode == Mode.SECURE:  # LAB-API2-01: the vulnerable mode forgot to check
             user(request, credentials)
         return REPORTS
+
+    @app.get("/catalog")
+    async def catalog() -> Response:
+        app.state.catalog_hits += 1
+        if app.state.mode == Mode.SECURE and app.state.catalog_hits > CATALOG_LIMIT:
+            return JSONResponse(
+                {"detail": "too many requests"}, status_code=429, headers={"Retry-After": "60"}
+            )
+        return JSONResponse(CATALOG)  # LAB-API4-01: the vulnerable mode never says no
+
+    @app.post("/tickets", status_code=201)
+    async def create_ticket(body: TicketBody, name: User) -> dict[str, str]:
+        # Nothing is kept: a body that is an array never gets here (422), in both modes.
+        return {"id": "tkt-1", "title": body.title, "owner": name}
+
+    def products_or_trace(sql: str, parameters: tuple[str, ...]) -> Response:
+        try:
+            return JSONResponse(query_products(sql, parameters))
+        except sqlite3.Error as error:
+            # LAB-SQL-01/02: the same debug handler as LAB-API8-05, with the database's error.
+            return PlainTextResponse("".join(traceback.format_exception(error)), status_code=500)
+
+    @app.get("/products")
+    async def search_products(user_name: User, name: str = "") -> Response:
+        del user_name
+        term = name
+        if app.state.mode == Mode.VULNERABLE:  # LAB-SQL-01: concatenated
+            sql = f"SELECT id, name, price FROM products WHERE name LIKE '%{term}%'"  # noqa: S608
+            return products_or_trace(sql, ())
+        sql = "SELECT id, name, price FROM products WHERE name LIKE '%' || ? || '%'"
+        return products_or_trace(sql, (term,))
+
+    @app.get("/products/{product_id}")
+    async def get_product(product_id: str, user_name: User) -> Response:
+        del user_name
+        if app.state.mode == Mode.VULNERABLE:  # LAB-SQL-02: concatenated
+            sql = f"SELECT id, name, price FROM products WHERE id = '{product_id}'"  # noqa: S608
+            response = products_or_trace(sql, ())
+        else:
+            response = products_or_trace(
+                "SELECT id, name, price FROM products WHERE id = ?", (product_id,)
+            )
+        if response.status_code == 200 and response.body == b"[]":
+            raise HTTPException(status_code=404, detail="not found")
+        return response
+
+    @app.get("/profile", response_model=None, responses={200: {"model": Profile}})
+    async def profile(name: User) -> Response:
+        shown: dict[str, object] = {"name": name, "email": f"{name}@laboratorio.invalid"}
+        if app.state.mode == Mode.VULNERABLE:  # LAB-API3-01: the whole user row
+            shown |= {"password_hash": "pbkdf2$1$sal$abc", "role": USERS[name]}
+        return JSONResponse(shown)
+
+    @app.post(
+        "/wishlist", status_code=201, response_model=None, responses={201: {"model": WishOut}}
+    )
+    async def add_wish(body: WishIn, request: Request, name: User) -> Response:
+        app.state.created += 1
+        item: dict[str, object] = {"id": f"wish-{app.state.created}", "product": body.product}
+        if app.state.mode == Mode.VULNERABLE:  # LAB-API3-02: every field of the body is kept
+            item = {"owner": name, **(await request.json()), "id": item["id"]}
+        else:
+            item["owner"] = name
+        app.state.wishlist[item["id"]] = item
+        return JSONResponse(item, status_code=201)
+
+    @app.delete("/wishlist/{item_id}", status_code=204)
+    async def remove_wish(item_id: str, name: User) -> Response:
+        if app.state.delete_status is not None:
+            return JSONResponse({"detail": "unavailable"}, status_code=app.state.delete_status)
+        item = app.state.wishlist.get(item_id)
+        # The owner, or whoever created it: in the vulnerable mode `owner` may say anything.
+        if item is None or (app.state.mode == Mode.SECURE and item["owner"] != name):
+            raise HTTPException(status_code=404, detail="not found")
+        del app.state.wishlist[item_id]
+        return Response(status_code=204)
 
     @app.get("/admin/users")
     async def list_users(name: User) -> list[dict[str, str]]:

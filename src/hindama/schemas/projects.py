@@ -86,6 +86,7 @@ MissingRequirement = Literal[
     "no_admin_identity",
     "no_resources",
     "policy_unconfirmed",
+    "not_implemented",
 ]
 
 

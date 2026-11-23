@@ -42,6 +42,7 @@ from hindama.models.enums import (
     AuditAction,
     AuthType,
     BlockStage,
+    DailyMetricName,
     EndReason,
     Module,
     RunStatus,
@@ -49,8 +50,10 @@ from hindama.models.enums import (
     VerificationStatus,
 )
 from hindama.repositories import audit as audit_log
+from hindama.repositories import metrics
 from hindama.repositories.audit import NewEntry
 from hindama.scanner import context as run_context
+from hindama.scanner.created import give_up_pending
 from hindama.scanner.evidence import Masker
 from hindama.scanner.limiter import BudgetExhaustedError, RequestLimiter
 from hindama.scanner.modules import Cell, Scan, ScanModule
@@ -58,6 +61,9 @@ from hindama.scanner.modules.authentication import Authentication
 from hindama.scanner.modules.configuration import Configuration
 from hindama.scanner.modules.function_access import FunctionAccess
 from hindama.scanner.modules.object_access import ObjectAccess
+from hindama.scanner.modules.property_access import PropertyAccess
+from hindama.scanner.modules.resource_consumption import ResourceConsumption
+from hindama.scanner.modules.sql_injection import SqlInjection
 from hindama.scanner.progress import Progress
 from hindama.scanner.recorder import Recorder
 from hindama.scanner.requester import Requester
@@ -74,6 +80,12 @@ VISIBILITY_POLL_SECONDS = 0.1
 
 # The code is no longer where it was, or the host now points somewhere forbidden: the ownership
 # is not valid any more (RF-20, CU-12 E2). A connection error proves nothing about ownership.
+# RF-20: one DNS or HTTP hiccup must not take the verification away. A failed check is repeated
+# with a short pause, and only the last answer counts. A host that really dropped the code still
+# loses it, a few seconds later.
+RECHECK_ATTEMPTS = 3
+RECHECK_PAUSE_SECONDS = 2.0
+
 _OWNERSHIP_LOST = {
     Outcome.FILE_NOT_FOUND,
     Outcome.CONTENT_MISMATCH,
@@ -91,6 +103,14 @@ MODULES: dict[Module, Callable[[], ScanModule]] = {
     Module.CONFIGURATION: Configuration,
     Module.OBJECT_ACCESS: ObjectAccess,
     Module.FUNCTION_ACCESS: FunctionAccess,
+    Module.PROPERTY_ACCESS: PropertyAccess,
+    Module.RESOURCE_CONSUMPTION: ResourceConsumption,
+    Module.SQL_INJECTION: SqlInjection,
+}
+# Anonymous count of how runs end (RF-78); `runs_started` is counted when the API creates it.
+ENDING_METRICS = {
+    RunStatus.CANCELLED: DailyMetricName.RUNS_CANCELLED,
+    RunStatus.FAILED: DailyMetricName.RUNS_FAILED,
 }
 
 
@@ -105,6 +125,7 @@ class Scanner:
     http_client: Callable[[str], SafeHttpClient]
     events: RunEvents
     hasher: HostHasher  # the audit log keeps a host's HMAC, never the host (ADR-015)
+    recheck_pause_seconds: float = RECHECK_PAUSE_SECONDS  # tests use 0: no fixed waits
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,12 +292,20 @@ async def _still_verified(scanner: Scanner, run: Run) -> bool:
     ):
         return False
     method = VerificationMethod(project.verification_method)
-    result = await scanner.ownership_checker.check(
-        method,
-        base_url=project.base_url,
-        host=project.host,
-        code=published_code(project.verification_code),
-    )
+    code = published_code(project.verification_code)
+    for attempt in range(1, RECHECK_ATTEMPTS + 1):
+        result = await scanner.ownership_checker.check(
+            method, base_url=project.base_url, host=project.host, code=code
+        )
+        if result.outcome == Outcome.VERIFIED or attempt == RECHECK_ATTEMPTS:
+            break
+        log.info(
+            "ownership_recheck_failed",
+            project_id=str(project_id),
+            attempt=attempt,
+            outcome=result.outcome.value,
+        )
+        await asyncio.sleep(scanner.recheck_pause_seconds)
     if result.outcome == Outcome.VERIFIED:
         return True
     if result.outcome not in _OWNERSHIP_LOST:
@@ -398,6 +427,12 @@ async def _finish(scanner: Scanner, run: Run, ending: Ending) -> None:
         )
         # Already final (the reconciliation failed it): it resolved there, not twice.
         if ended is not None:
+            # RN-06: a cancelled cell may still be deleting; it overwrites this when it finishes.
+            if await give_up_pending(session, run.id, "not_deleted"):
+                log.warning("created_resources_left", run_id=str(run.id))
+            ending_metric = ENDING_METRICS.get(ending.status)
+            if ending_metric is not None:
+                await metrics.increment_daily(session, ending_metric)
             resolved = await resolve_not_detected(session, run.project_id, run.id)
             if resolved:
                 log.info("findings_resolved", run_id=str(run.id), count=resolved)

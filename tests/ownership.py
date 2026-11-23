@@ -29,9 +29,13 @@ class ScriptedChecker:
             VerificationMethod.DNS: CheckResult(Outcome.VERIFIED),
         }
         self.calls: list[tuple[VerificationMethod, str, str, str]] = []
+        # Answers given once, before `results`, in order: a hiccup and then the usual answer.
+        self.first: dict[VerificationMethod, list[CheckResult]] = {}
 
     async def check(
         self, method: VerificationMethod, *, base_url: str, host: str, code: str
     ) -> CheckResult:
         self.calls.append((method, base_url, host, code))
+        if self.first.get(method):
+            return self.first[method].pop(0)
         return self.results[method]

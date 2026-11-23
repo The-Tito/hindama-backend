@@ -2,6 +2,30 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versiones con [SemVer](https://semver.org/lang/es/). La versión del backend es independiente de la del contrato de la API (`hindama-docs/03-api/openapi.yaml`).
 
+## [0.2.0] — 2026-11-23
+
+Los **siete módulos de prueba** (F-09) y las estadísticas del administrador. Implementa el **contrato 0.10.0 completo**: 40 de 40 operaciones, cubiertas por 1 044 pruebas y verificadas con Schemathesis como analista y como administrador. El catálogo del laboratorio (1.5) fija lo que cada módulo debe encontrar y lo que no.
+
+### Agregado
+
+- Módulo de propiedades (API3, RF-58): campos que la respuesta trae sin declararlos y asignación masiva al crear. Solo escribe donde el contrato ofrece el DELETE de lo creado; anota el recurso antes de crearlo y lo borra en la misma celda, también al cancelar (RN-06). Catálogo del laboratorio 1.5.
+- Limpieza de recursos creados (RN-06, CU-23 E1): lo que siga pendiente al terminar, o en una ejecución que la reconciliación da por perdida, queda `failed` con su motivo, a la vista en `created_resources`.
+- Contrato 0.10.0: `created_resources.failed_items` dice la ruta, la operación y el motivo de cada recurso que el analista debe borrar a mano (CU-23 E1).
+- Módulo de inyección SQL (CWE-89, RF-60): pruebas de error y booleana en los parámetros de ruta y de consulta de las operaciones GET, sin escribir ni esperar (RN-06). Catálogo del laboratorio 1.4.
+- Módulo de consumo de recursos (API4, RF-59): ráfaga de hasta 40 peticiones y cuerpos crecientes de hasta 8 MB, sin crear nada en la API del analista (RN-06). Catálogo del laboratorio 1.3.
+- Estadísticas del administrador: `GET /admin/stats` (contrato 0.9.0), con actividad por día o semana y hallazgos por módulo, categoría OWASP y severidad, solo de métricas anónimas (CU-20, RF-78, RF-79, RF-89).
+- Métricas diarias de ejecuciones: `runs_started` al lanzar o repetir, `runs_cancelled` y `runs_failed` al terminar así (RF-78). Migración `7c4e1a2b9d30`.
+
+### Cambiado
+
+- La verificación al iniciar una ejecución se repite hasta 3 veces, con 2 s de pausa, antes de quitarle la verificación al proyecto: un fallo pasajero del DNS ya no la hace perder (RF-20).
+- Contrato 0.8.0: un módulo que el motor no tiene informa `not_implemented` en `modules[].missing` y lanzarlo responde `run.module_unavailable`, en lugar de planear 0 celdas en silencio (RF-45). Desde esta versión no hay ninguno; la regla queda para módulos futuros.
+
+### Fuera de esta versión
+
+- Reportes y exportación a Excel (CU-18, CU-19), baja de cuenta (CU-25), respaldos (CU-24) y 2FA TOTP (CU-22).
+- Ejecutar Hindama contra sí misma en AWS.
+
 ## [0.1.0] — 2026-11-23
 
 Primera versión entregable. Implementa el **contrato 0.7.0 completo**: 39 de 39 operaciones, cubiertas por 992 pruebas y verificadas con Schemathesis como analista y como administrador.
@@ -68,4 +92,5 @@ Primera versión entregable. Implementa el **contrato 0.7.0 completo**: 39 de 39
 - **Funcionalidades:** reportes y exportación a Excel (CU-18, CU-19), estadísticas del administrador (CU-20), baja de cuenta (CU-25), respaldos (CU-24) y 2FA TOTP (CU-22).
 - **Ejecutar Hindama contra sí misma:** se hará después de esta versión.
 
+[0.2.0]: https://github.com/The-Tito/hindama-backend/releases/tag/v0.2.0
 [0.1.0]: https://github.com/The-Tito/hindama-backend/releases/tag/v0.1.0

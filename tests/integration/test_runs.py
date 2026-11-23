@@ -8,6 +8,7 @@ and cancel a run while it scans the lab.
 import asyncio
 import json
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -17,7 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from hindama.core.run_events import RunEvent
 from hindama.core.run_queue import RunQueue
-from hindama.models import Run
+from hindama.models import DailyMetric, Run
+from hindama.models.enums import DailyMetricName, Module
+from hindama.services import projects as projects_service
 from tests.events import MemoryRunEvents
 from tests.integration.conftest import Analyst
 from tests.queue import FailingRunQueue, MemoryRunQueue
@@ -96,6 +99,17 @@ async def start(owner: AsyncEngine, run_id: str) -> None:
         run.heartbeat_at = func.now()
 
 
+async def daily(owner: AsyncEngine, metric: DailyMetricName) -> int:
+    """Today's value of an anonymous metric (RF-78)."""
+    async with owner.connect() as connection:
+        value = await connection.scalar(
+            select(DailyMetric.value).where(
+                DailyMetric.date == datetime.now(UTC).date(), DailyMetric.metric == metric
+            )
+        )
+    return value or 0
+
+
 def sse_events(body: str) -> list[tuple[str, dict[str, Any]]]:
     """`(event, data)` of a stream, without `retry` and pings."""
     result = []
@@ -132,7 +146,12 @@ async def test_launch_a_run(
     assert body["progress"]["percent"] == 0
     assert body["progress"]["cells_planned"] == 0
     assert body["progress"]["findings_by_severity"]["total"] == 0
-    assert body["created_resources"] == {"pending": 0, "deleted": 0, "failed": 0}
+    assert body["created_resources"] == {
+        "pending": 0,
+        "deleted": 0,
+        "failed": 0,
+        "failed_items": [],
+    }
     assert body["started_at"] is None
     assert run_queue.enqueued == [UUID(body["id"])]
     async with await owner_session(owner) as db:
@@ -140,6 +159,21 @@ async def test_launch_a_run(
     assert run is not None
     assert run.job_id == f"run:{body['id']}"
     assert run.config["modules"] == ["configuration"]
+
+
+async def test_launching_and_repeating_count_as_started_runs(
+    project: Project, owner: AsyncEngine
+) -> None:
+    before = await daily(owner, DailyMetricName.RUNS_STARTED)
+
+    refused = await project.launch(modules=["authentication"])  # no contract: not counted
+    created = (await project.launch()).json()
+    await finish(owner, created["id"])
+    repeated = await rerun(project, created["id"])
+
+    assert repeated.status_code == 202, repeated.text
+    assert refused.status_code == 422
+    assert await daily(owner, DailyMetricName.RUNS_STARTED) == before + 2
 
 
 async def test_modules_are_kept_in_catalog_order(ana: Analyst) -> None:
@@ -226,6 +260,33 @@ async def test_unavailable_modules_are_named(project: Project) -> None:
     assert [e["field"] for e in body["errors"]] == ["modules.1", "modules.2"]  # no contract
 
 
+async def test_a_module_the_scanner_does_not_have_is_refused(
+    ana: Analyst, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Every module exists since task 3.2: the rule stays for the next one (RF-45).
+    without = frozenset(Module) - {Module.PROPERTY_ACCESS}
+    monkeypatch.setattr(projects_service, "IMPLEMENTED_MODULES", without)
+    project = await new_project(ana, contract=True)
+
+    await project.analyst.request(  # meets its other requirement: an authenticated identity
+        "POST",
+        f"/projects/{project.id}/identities",
+        json={
+            "name": "A",
+            "role": "user",
+            "auth_type": "bearer",
+            "credential": {"token": "t" * 12},
+        },
+    )
+
+    response = await project.launch(modules=["property_access"], confirm_risk=True)
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "run.module_unavailable"  # RF-45: not dropped in silence
+    assert [e["field"] for e in body["errors"]] == ["modules.0"]
+
+
 async def test_medium_and_high_risk_need_a_confirmation(ana: Analyst) -> None:
     project = await new_project(ana, contract=True)
 
@@ -258,6 +319,17 @@ async def test_without_the_queue_nothing_is_created(
             select(func.count()).select_from(Run).where(Run.project_id == UUID(project.id))
         )
     assert count == 0  # the project is not blocked by a run without a job (RN-07)
+
+
+@pytest.mark.parametrize("run_queue", [FailingRunQueue()])
+async def test_a_run_rolled_back_is_not_counted(
+    project: Project, run_queue: RunQueue, owner: AsyncEngine
+) -> None:
+    before = await daily(owner, DailyMetricName.RUNS_STARTED)
+
+    assert (await project.launch()).status_code == 503
+
+    assert await daily(owner, DailyMetricName.RUNS_STARTED) == before
 
 
 async def test_another_analysts_project_is_not_found(project: Project, new_analyst: Any) -> None:
@@ -382,6 +454,18 @@ async def test_a_queued_run_is_cancelled_at_once(
     assert run_events.of(UUID(created["id"])) == [RunEvent.END]  # its streams close
     # The project is free for another run (RN-07).
     assert (await project.launch()).status_code == 202
+
+
+async def test_cancelling_a_queued_run_counts_it_once(project: Project, owner: AsyncEngine) -> None:
+    before = await daily(owner, DailyMetricName.RUNS_CANCELLED)
+    created = (await project.launch()).json()
+    cancel = f"{project.runs}/{created['id']}/cancel"
+
+    await project.analyst.request("POST", cancel)
+    again = await project.analyst.request("POST", cancel)
+
+    assert again.status_code == 409  # already final: `run.not_active`
+    assert await daily(owner, DailyMetricName.RUNS_CANCELLED) == before + 1
 
 
 async def test_a_running_run_gets_the_request_and_its_job_is_aborted(

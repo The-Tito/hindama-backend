@@ -29,16 +29,18 @@ from hindama.core.errors import (
     UnprocessableError,
 )
 from hindama.core.run_queue import QueueUnavailableError, RunQueue
-from hindama.models import ContractVersion, Run
+from hindama.models import ContractVersion, CreatedResource, Run
 from hindama.models.enums import (
     ACTIVE_RUN_STATUSES,
     CreatedResourceStatus,
+    DailyMetricName,
     EndReason,
     Module,
     RunStatus,
     Severity,
     Verdict,
 )
+from hindama.repositories import metrics
 from hindama.repositories import projects as projects_repository
 from hindama.repositories import runs as repository
 from hindama.repositories.runs import Cell
@@ -53,6 +55,7 @@ class RunView:
     contract: ContractVersion | None
     findings: dict[Severity, int]
     created_resources: dict[CreatedResourceStatus, int]
+    failed_resources: Sequence[CreatedResource] = ()
 
 
 async def _contract(session: AsyncSession, run: Run) -> ContractVersion | None:
@@ -75,6 +78,7 @@ async def _view(session: AsyncSession, run: Run) -> RunView:
         contract=await _contract(session, run),
         findings=(await repository.findings_by_severity(session, [run.id]))[run.id],
         created_resources=await repository.created_resources(session, run.id),
+        failed_resources=await repository.failed_resources(session, run.id),
     )
 
 
@@ -150,6 +154,8 @@ async def create_run(
     )
     session.add(run)
     await session.flush()
+    # Same transaction: a run that Redis rolls back is not counted (RF-78).
+    await metrics.increment_daily(session, DailyMetricName.RUNS_STARTED)
     try:
         run.job_id = await queue.enqueue(run.id)
     except QueueUnavailableError as error:
@@ -229,6 +235,7 @@ async def cancel_run(
         run.status = RunStatus.CANCELLED
         run.end_reason = EndReason.CANCELLED_BY_USER
         run.finished_at = func.now()
+        await metrics.increment_daily(session, DailyMetricName.RUNS_CANCELLED)
     try:
         await queue.abort(run.id)
     except QueueUnavailableError as error:
