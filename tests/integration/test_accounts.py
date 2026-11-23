@@ -60,6 +60,7 @@ async def test_me_registers_the_user_and_reads_the_profile_from_cognito(
         "name": "Ana López",
         "email": "ana@ejemplo.com",
         "role": "analyst",
+        "mfa_enabled": False,
         "terms": {
             "current_version": CURRENT,
             "accepted_version": None,

@@ -15,7 +15,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hindama.core.auth import CurrentUser
-from hindama.core.errors import ConflictError, NotFoundError
+from hindama.core.errors import ConflictError, NotFoundError, UnprocessableError
 from hindama.models import Finding, FindingEvent
 from hindama.models.enums import (
     OPEN_FINDING_STATUSES,
@@ -30,6 +30,8 @@ from hindama.repositories import projects as projects_repository
 from hindama.repositories.findings import EventRow, FindingRow, OccurrenceRow
 
 log = structlog.get_logger(__name__)
+
+EXPORT_LIMIT = 5_000  # findings per Excel workbook (RF-77)
 
 # The event of each dismissal reason (modelo.md section 3.4).
 _DISMISSAL_EVENTS = {
@@ -77,6 +79,39 @@ async def list_findings(
         page=page,
         page_size=page_size,
     )
+
+
+async def export_findings(
+    session: AsyncSession,
+    project_id: UUID,
+    *,
+    modules: Collection[Module],
+    severities: Collection[Severity],
+    statuses: Collection[FindingStatus],
+    run_id: UUID | None,
+    identity_id: UUID | None,
+    operation_id: UUID | None,
+) -> list[FindingRow]:
+    """RF-77. The rows of `list_findings` with the same filters, all of them up to the limit."""
+    rows, total = await list_findings(
+        session,
+        project_id,
+        modules=modules,
+        severities=severities,
+        statuses=statuses,
+        run_id=run_id,
+        identity_id=identity_id,
+        operation_id=operation_id,
+        page=1,
+        page_size=EXPORT_LIMIT,
+    )
+    if total > EXPORT_LIMIT:
+        raise UnprocessableError(
+            "finding.export_too_large",
+            "Demasiados hallazgos",
+            "Se pueden exportar hasta 5 000 hallazgos. Filtra la lista e inténtalo de nuevo.",
+        )
+    return rows
 
 
 async def get_finding(session: AsyncSession, project_id: UUID, finding_id: UUID) -> FindingView:

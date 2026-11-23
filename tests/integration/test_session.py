@@ -186,6 +186,7 @@ async def test_roles_are_enforced(
     analyst, admin = str(new_id()), str(new_id())
     subs += [analyst, admin]
     analyst_session = Session(anonymous_client, user_pool, analyst)
+    user_pool.mfa.add(admin)  # the panel requires the TOTP (RF-86)
     admin_session = Session(anonymous_client, user_pool, admin, admin=True)
 
     assert (await analyst_session.get("/admin-probe")).json()["code"] == "role.forbidden"

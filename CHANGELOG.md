@@ -2,6 +2,26 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versiones con [SemVer](https://semver.org/lang/es/). La versión del backend es independiente de la del contrato de la API (`hindama-docs/03-api/openapi.yaml`).
 
+## [0.3.0] — 2026-11-23
+
+Baja de cuenta, exportación a Excel y segundo factor obligatorio para administradores. Implementa el **contrato 0.12.0 completo**: 42 de 42 operaciones, cubiertas por 1 091 pruebas y verificadas con Schemathesis como analista y como administrador.
+
+### Agregado
+
+- Baja de cuenta: `DELETE /me` con confirmación del correo (CU-25, RF-88). Borra el usuario y en cascada sus proyectos, suma `deleted_accounts` y registra `account_deleted` en una transacción; después borra la cuenta en Cognito con `DeleteUser` y el token del propio usuario, sin permisos IAM nuevos. Si Cognito falla, `account.deletion_incomplete` (503) y la baja se repite (CU-25 E3).
+- Exportar hallazgos a Excel: `GET /projects/{project_id}/findings/export` con los filtros de la lista (CU-19, RF-77). Sin evidencia ni credenciales (RN-11), toda celda de texto queda como texto y nunca como fórmula (CWE-1236), hasta 5 000 hallazgos (`finding.export_too_large`).
+- Dependencia `openpyxl` para escribir el `.xlsx`.
+- Segundo factor (CU-22, RF-85, RF-86, ADR-018): `GET /me` informa `mfa_enabled`, leído de Cognito, y `/admin/*` responde 403 `auth.mfa_required` al administrador sin TOTP activo. El pool `hindama-dev` tiene TOTP opcional, y `create-user-pool.sh` lo activa en un pool nuevo.
+
+### Cambiado
+
+- Contrato 0.11.0: `finding_type` garantiza el mismo `title` y es la llave para agrupar hallazgos repetidos (B21). Sin cambio de código: los títulos ya eran constantes de cada comprobación.
+
+### Fuera de esta versión
+
+- Respaldos (CU-24). El reporte imprimible (CU-18) es del frontend.
+- Ejecutar Hindama contra sí misma en AWS (RNF-10).
+
 ## [0.2.0] — 2026-11-23
 
 Los **siete módulos de prueba** (F-09) y las estadísticas del administrador. Implementa el **contrato 0.10.0 completo**: 40 de 40 operaciones, cubiertas por 1 044 pruebas y verificadas con Schemathesis como analista y como administrador. El catálogo del laboratorio (1.5) fija lo que cada módulo debe encontrar y lo que no.

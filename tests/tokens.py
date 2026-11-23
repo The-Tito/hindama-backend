@@ -9,7 +9,7 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from hindama.core.auth import TokenVerifier
-from hindama.core.cognito import GET_USER_TARGET, ProfileClient
+from hindama.core.cognito import DELETE_USER_TARGET, GET_USER_TARGET, ProfileClient
 
 REGION = "us-east-1"
 USER_POOL_ID = "us-east-1_TestPool1"
@@ -30,6 +30,10 @@ class FakeUserPool:
         self.attributes: dict[str, dict[str, str]] = {}
         self.get_user_response: tuple[int, dict[str, Any]] | None = None
         self.get_user_requests: list[httpx.Request] = []
+        self.mfa: set[str] = set()  # subs with the TOTP active (UserMFASettingList)
+        # DeleteUser: the subs deleted, and a forced answer (status, body) to simulate failures.
+        self.deleted: list[str] = []
+        self.delete_user_response: tuple[int, dict[str, Any]] | None = None
 
     def jwks(self) -> dict[str, Any]:
         public = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(self.key.public_key()))
@@ -87,17 +91,27 @@ class FakeUserPool:
     def get_user_transport(self) -> httpx.MockTransport:
         def handle(request: httpx.Request) -> httpx.Response:
             assert str(request.url) == IDP_ENDPOINT
+            token = json.loads(request.content)["AccessToken"]
+            sub = jwt.decode(token, options={"verify_signature": False})["sub"]
+            if request.headers["X-Amz-Target"] == DELETE_USER_TARGET:
+                if self.delete_user_response is not None:
+                    status, body = self.delete_user_response
+                    return httpx.Response(status, json=body)
+                self.deleted.append(sub)
+                return httpx.Response(200, json={})
             assert request.headers["X-Amz-Target"] == GET_USER_TARGET
             self.get_user_requests.append(request)
             if self.get_user_response is not None:
                 status, body = self.get_user_response
                 return httpx.Response(status, json=body)
-            token = json.loads(request.content)["AccessToken"]
-            sub = jwt.decode(token, options={"verify_signature": False})["sub"]
             attributes = [{"Name": "sub", "Value": sub}] + [
                 {"Name": name, "Value": value} for name, value in self.profile(sub).items()
             ]
-            return httpx.Response(200, json={"Username": sub, "UserAttributes": attributes})
+            user: dict[str, Any] = {"Username": sub, "UserAttributes": attributes}
+            if sub in self.mfa:
+                user["UserMFASettingList"] = ["SOFTWARE_TOKEN_MFA"]
+                user["PreferredMfaSetting"] = "SOFTWARE_TOKEN_MFA"
+            return httpx.Response(200, json=user)
 
         return httpx.MockTransport(handle)
 
