@@ -6,6 +6,7 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 
 ### Agregado
 
+- Módulo de consumo de recursos (API4, RF-59): ráfaga de hasta 40 peticiones y cuerpos crecientes de hasta 8 MB, sin crear nada en la API del analista (RN-06). Catálogo del laboratorio 1.3.
 - Estadísticas del administrador: `GET /admin/stats` (contrato 0.9.0), con actividad por día o semana y hallazgos por módulo, categoría OWASP y severidad, solo de métricas anónimas (CU-20, RF-78, RF-79, RF-89).
 - Métricas diarias de ejecuciones: `runs_started` al lanzar o repetir, `runs_cancelled` y `runs_failed` al terminar así (RF-78). Migración `7c4e1a2b9d30`.
 

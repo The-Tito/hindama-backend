@@ -58,7 +58,7 @@ ALL_MISSING = {
         "insufficient_identities",
         "not_implemented",
     ],
-    "resource_consumption": ["project_not_verified", "no_contract", "not_implemented"],
+    "resource_consumption": ["project_not_verified", "no_contract"],
     "sql_injection": ["project_not_verified", "no_contract", "not_implemented"],
 }
 
@@ -576,7 +576,7 @@ async def test_dashboard_with_activity(ana: Analyst, owner: AsyncEngine) -> None
         "object_access": [],
         "function_access": ["policy_unconfirmed"],  # its admin-only operation was retired
         "property_access": ["not_implemented"],  # RF-45: the scanner does not have them yet
-        "resource_consumption": ["not_implemented"],
+        "resource_consumption": [],
         "sql_injection": ["not_implemented"],
     }
     assert listed["open_findings"] == 3

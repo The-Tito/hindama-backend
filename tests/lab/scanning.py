@@ -61,6 +61,7 @@ POLICIES = {
     "GET /invoices/{invoice_id}": ("owner_only", "owner"),
     "GET /accounts/{account_id}/statement": ("owner_or_admin", "owner"),
     "GET /reports": ("authenticated", None),
+    "GET /catalog": ("public", None),
     "GET /admin/users": ("admin_only", None),
     "GET /admin/audit": ("admin_only", None),
     "DELETE /admin/users/{user_id}": ("admin_only", None),
@@ -93,7 +94,8 @@ class LabProject:
         return response.json() if response.content else None
 
     async def launch(self, modules: list[str], **limits: int) -> UUID:
-        body: dict[str, Any] = {"modules": modules, "limits": limits}
+        # The analyst confirms the risk of medium and high modules (RN-05); ignored without them.
+        body: dict[str, Any] = {"modules": modules, "limits": limits, "confirm_risk": True}
         created = await self.call("POST", "/runs", json=body)
         return UUID(created["id"])
 
@@ -176,6 +178,7 @@ async def run_lab(
     **limits: int,
 ) -> UUID:
     lab.state.seen.clear()
+    lab.state.catalog_hits = 0
     run_id = await project.launch(list(modules), **limits)
     await execute(scanner, run_id, nothing)
     return run_id
