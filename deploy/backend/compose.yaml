@@ -57,7 +57,7 @@ services:
     tmpfs:
       - /tmp
     <<: *hardening
-    mem_limit: 64m
+    mem_limit: 128m  # measured: 52 MB at rest with the internal CA (2026-11-22)
     logging: *logging
     restart: unless-stopped
 

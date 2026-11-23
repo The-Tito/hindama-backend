@@ -9,6 +9,7 @@ Archivos que la EC2 del backend usa en `/opt/hindama` (arquitectura §2.3 y §3.
 | `load-env.sh` | Lee `/hindama/backend/*` de SSM con el rol de la instancia y escribe `/run/hindama/backend.env` (tmpfs, permisos 0600). Los secretos nunca tocan el disco. Solo imprime los nombres. |
 | `compose.yaml` | Caddy, Redis, migraciones, API y motor, con límites de memoria, logs `awslogs`, solo lectura y `restart: unless-stopped`. No incluye PostgreSQL, porque la base es RDS. |
 | `Caddyfile` | TLS con la CA propia de Caddy (`tls internal`) para `backend.internal:8443`, publicado solo en la IP privada. |
+| `iam/` | Política de confianza y políticas del rol `hindama-backend-ec2`, con `CUENTA` como marcador (el número de cuenta no se versiona). |
 | `rds-roles.sql`, `init-rds.sh` | Crean los roles y la base en RDS una sola vez, con el usuario maestro (que en RDS no es superusuario). |
 
 ## Parámetros de SSM

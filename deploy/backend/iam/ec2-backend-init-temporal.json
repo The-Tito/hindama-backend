@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ContrasenaMaestraTemporal",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:us-east-1:CUENTA:parameter/hindama/backend-init/db-master-password"
+    }
+  ]
+}
