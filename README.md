@@ -1,7 +1,142 @@
 # hindama-backend
 
-API de la plataforma y motor de pruebas de **Hindama**: FastAPI, PostgreSQL, Redis y RQ.
+API de la plataforma y motor de pruebas de **Hindama**: FastAPI, PostgreSQL, Redis y un motor de pruebas asíncrono.
 
-La documentación del proyecto (requerimientos, arquitectura, contrato de la API) vive en el repositorio [`hindama-docs`](../hindama-docs), que se clona junto a este en la misma carpeta madre.
+La documentación del proyecto (requerimientos, arquitectura, modelo de datos, contrato de la API) vive en el repositorio [`hindama-docs`](../hindama-docs), que se clona junto a este en la misma carpeta madre. El contrato [`03-api/openapi.yaml`](../hindama-docs/03-api/openapi.yaml) es la fuente de verdad de la API ([ADR-016](../hindama-docs/01-arquitectura/decisiones/ADR-016-contrato-primero-con-verificacion-automatica.md)).
 
-> Estado: repositorio inicializado. El código empieza después del documento de arquitectura.
+## Requisitos
+
+- [uv](https://docs.astral.sh/uv/) (instala Python 3.12 si hace falta).
+- Docker con Docker Compose.
+
+## Estructura
+
+Organización por capas. Una petición recorre `api` → `services` → `repositories` → `models`. Todos los identificadores del código están en inglés ([ADR-017](../hindama-docs/01-arquitectura/decisiones/ADR-017-identificadores-en-ingles.md)); la traducción de cada término del dominio está en el [glosario de identificadores](../hindama-docs/03-api/glosario-identificadores.md).
+
+```
+src/hindama/
+├── config.py        Configuración desde variables de entorno
+├── main.py          Crea la aplicación FastAPI
+├── api/             Routers HTTP, uno por recurso del contrato
+├── schemas/         Pydantic de entrada y salida (reflejan el contrato)
+├── services/        Casos de uso y reglas de negocio; no conocen HTTP
+├── repositories/    Consultas a la base de datos
+├── models/          Modelos de SQLAlchemy (todo el esquema)
+├── db/              Engine, sesiones y variables de Row-Level Security
+└── core/            Transversal: errores, registros, id de petición, tokens
+migrations/          Alembic (versiones en migrations/versions/)
+tests/
+├── unit/            Sin base de datos
+├── integration/     Contra PostgreSQL real (RLS no se puede probar en SQLite)
+└── contract/        La API cumple 03-api/openapi.yaml
+```
+
+## Comandos
+
+```bash
+uv sync                          # instala dependencias en .venv
+uv run ruff check .              # lint (incluye reglas de seguridad de Bandit)
+uv run ruff format .             # formato
+uv run mypy                      # tipos
+uv run pytest                    # pruebas (con --cov: mínimo 90 % de cobertura)
+uv run pip-audit                 # vulnerabilidades en dependencias
+uv run pre-commit install        # una vez: ruff, mypy, gitleaks y revisiones básicas antes de cada commit
+```
+
+### Integración continua
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) corre en cada pull request y en `develop` y `main`. Todo job debe pasar:
+
+| Job | Qué revisa |
+| --- | --- |
+| Lint y tipos | `ruff check`, `ruff format --check`, `mypy` (también `tests/` y `migrations/`) |
+| Pruebas, migraciones y contrato | Crea los roles con el mismo script de Compose, aplica las migraciones de ida y vuelta, `alembic check`, las pruebas con cobertura y Schemathesis contra la API levantada. Con `HINDAMA_FAIL_ON_SKIP=1`, una prueba omitida hace fallar el job. |
+| Dependencias vulnerables | `pip-audit` sobre lo que fija `uv.lock`, con hashes |
+| Imagen y Trivy | Construye la imagen y la escanea (vulnerabilidades altas o críticas con corrección disponible, y configuración insegura) |
+
+Las acciones están fijadas por SHA de commit.
+
+### Prueba de contrato
+
+[tests/contract/test_openapi_contract.py](tests/contract/test_openapi_contract.py) compara el OpenAPI que genera la app con `hindama-docs/03-api/openapi.yaml` (ADR-016). Toda operación implementada debe existir en el contrato y coincidir en `operationId`, seguridad, parámetros, esquemas de entrada, respuestas 2xx y las respuestas de error que la app documenta. Las operaciones del contrato aún sin implementar solo aparecen como aviso. Por defecto lee el contrato de la carpeta hermana `../hindama-docs`; otra ruta se indica con `HINDAMA_CONTRACT_PATH`.
+
+### Schemathesis
+
+La prueba de contrato compara documentos; [Schemathesis](https://schemathesis.readthedocs.io) prueba la API **en ejecución**. Genera cientos de peticiones a partir del contrato contra la API real (PostgreSQL de `hindama_test`, Cognito y DNS falsos) y valida cada respuesta: códigos, esquemas, cabeceras y campos de más (`additionalProperties: false`, RN-11). Se adoptó en la prueba técnica PT-03 de `hindama-docs`, donde encontró tres errores que las pruebas no veían.
+
+```bash
+# con la base levantada y las variables de "Pruebas de integración"
+tests/schemathesis/run.sh                     # semilla fija, 50 ejemplos por operación
+tests/schemathesis/run.sh --max-examples 300  # más a fondo
+```
+
+[tests/schemathesis/serve.py](tests/schemathesis/serve.py) levanta la API con su propio analista (que ya aceptó los términos) y lo borra al terminar, junto con todo lo que se creó. [schemathesis.toml](schemathesis.toml) declara los 422 de reglas de negocio que un esquema no expresa y desactiva las operaciones del contrato aún no implementadas: al implementar una, se borra su bloque.
+
+### Entorno local con Docker Compose
+
+Para levantarlo junto con el frontend (Windows, HTTPS y `.env` generado), sigue [entorno local y conexiones](../hindama-docs/03-api/entorno-local.md).
+
+```bash
+cp .env.example .env               # y cambia cada contraseña y la llave de credenciales
+docker compose up --build          # PostgreSQL 16 + API en http://localhost:8000
+curl localhost:8000/health         # {"status":"ok"}
+```
+
+- PostgreSQL crea al iniciar por primera vez los cuatro roles (`hindama_migrations`, `hindama_api`, `hindama_scanner`, `hindama_backup`) y las bases `hindama` y `hindama_test` ([docker/postgres/init/01-roles.sh](docker/postgres/init/01-roles.sh)). Si cambias contraseñas en `.env` después, borra el volumen: `docker compose down -v`.
+- La API recarga sola al editar `src/`. Corre con el mismo endurecimiento que en producción: usuario sin privilegios, sistema de archivos de solo lectura y 512 MB de memoria.
+- Los puertos solo escuchan en `127.0.0.1`.
+
+### Migraciones
+
+Alembic se conecta como `hindama_migrations`, el dueño del esquema; nunca con un rol de la aplicación. `docker compose up` las aplica solo (servicio `migrations`) antes de arrancar la API. Desde tu máquina:
+
+```bash
+set -a; . ./.env; set +a
+export HINDAMA_MIGRATIONS_DATABASE_URL="postgresql+asyncpg://hindama_migrations:${HINDAMA_MIGRATIONS_DB_PASSWORD}@localhost:5432/hindama"
+uv run alembic upgrade head                              # aplicar
+uv run alembic revision --autogenerate -m "descripción"  # nueva migración (revísala a mano)
+uv run alembic check                                     # ¿los modelos coinciden con la base?
+```
+
+`autogenerate` no detecta políticas RLS, permisos ni triggers: esas migraciones se escriben a mano.
+
+### Pruebas de integración
+
+Corren contra PostgreSQL real; sin estas variables se omiten. Las de reglas del esquema se conectan como dueño, porque prueban restricciones, no permisos. Las de seguridad de la base (RLS, privilegios, bitácora inmutable) usan los tres roles:
+
+```bash
+set -a; . ./.env; set +a
+export HINDAMA_MIGRATIONS_DATABASE_URL="postgresql+asyncpg://hindama_migrations:${HINDAMA_MIGRATIONS_DB_PASSWORD}@localhost:5432/hindama_test"
+uv run alembic upgrade head          # la base de pruebas también necesita el esquema
+export HINDAMA_TEST_DATABASE_URL="postgresql+asyncpg://hindama_api:${HINDAMA_API_DB_PASSWORD}@localhost:5432/hindama_test"
+export HINDAMA_TEST_OWNER_DATABASE_URL="postgresql+asyncpg://hindama_migrations:${HINDAMA_MIGRATIONS_DB_PASSWORD}@localhost:5432/hindama_test"
+export HINDAMA_TEST_SCANNER_DATABASE_URL="postgresql+asyncpg://hindama_scanner:${HINDAMA_SCANNER_DB_PASSWORD}@localhost:5432/hindama_test"
+uv run pytest
+```
+
+### Configuración
+
+Se lee de variables de entorno con el prefijo `HINDAMA_` (ver `src/hindama/config.py`). Se arranca con `--no-access-log` porque el registro de uvicorn incluye la query string; la API escribe su propio registro de cada petición.
+
+### Credenciales de las identidades
+
+Las credenciales de las identidades de prueba se cifran con AES-256-GCM antes de guardarse ([ADR-007](../hindama-docs/01-arquitectura/decisiones/ADR-007-cifrado-de-credenciales-aes-gcm.md); [src/hindama/core/credentials.py](src/hindama/core/credentials.py)). La llave maestra nunca va en la base ni en el código:
+
+- `HINDAMA_CREDENTIAL_KEYS`: mapa JSON de versión a llave de 32 bytes en base64, por ejemplo `{"1":"…"}`. Sin él, la API no arranca.
+- `HINDAMA_CREDENTIAL_KEY_VERSION`: la versión con la que se cifran las credenciales nuevas.
+- Genera una llave con `python -c "import base64,os; print(base64.b64encode(os.urandom(32)).decode())"`. En producción viene de SSM Parameter Store (`/hindama/backend/credential-keys`).
+- **Rotar:** agrega la versión nueva, cambia la versión vigente, vuelve a cifrar las filas y después retira la anterior. Perder una llave deja ilegibles las credenciales cifradas con ella; la prueba de una identidad así responde 500 sin detalles.
+
+### Bitácora
+
+La bitácora ([src/hindama/services/audit.py](src/hindama/services/audit.py); RF-81 a RF-84, ADR-015) guarda el HMAC-SHA256 del host de un proyecto, nunca el host:
+
+- `HINDAMA_AUDIT_HMAC_KEYS` y `HINDAMA_AUDIT_HMAC_KEY_VERSION`: mismo formato que las llaves de credenciales, pero con una llave distinta. Sin ellas, la API y el motor no arrancan. En producción vienen de SSM (`/hindama/backend/audit-hmac-keys`).
+- **Rotar:** agrega la versión nueva y cámbiala como vigente. La anterior se conserva mientras haya registros suyos (6 meses, RF-90): la búsqueda por host calcula el HMAC con todas las versiones cargadas.
+- La IP de origen llega del frontend en `X-Hindama-Client-IP`. Solo se guarda si es una IPv4 o IPv6 válida, y nunca autoriza nada.
+
+### Autenticación
+
+Toda petición, salvo `GET /health` (y `/docs` fuera de producción), necesita `Authorization: Bearer <access token de Cognito>`; si no, responde 401 antes de cualquier otra validación, incluso en rutas que no existen (RF-07). La API valida la firma con las llaves públicas del User Pool (`HINDAMA_COGNITO_REGION`, `HINDAMA_COGNITO_USER_POOL_ID`, `HINDAMA_COGNITO_CLIENT_ID`) y no guarda ningún secreto de Cognito.
+
+Cada endpoint que usa la base abre una transacción con `DbSession`, que fija las variables de RLS del usuario y lo da de alta en su primer acceso. Los endpoints de proyectos piden `Analyst` (el administrador recibe 403) y los de administración, `Admin` ([src/hindama/api/dependencies.py](src/hindama/api/dependencies.py)). Las pruebas firman sus propios tokens con un User Pool simulado ([tests/tokens.py](tests/tokens.py)).

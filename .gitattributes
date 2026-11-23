@@ -1,0 +1,2 @@
+# PostgreSQL ejecuta estos scripts dentro de Linux: con CRLF no se crean los roles.
+*.sh text eol=lf

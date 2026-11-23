@@ -1,0 +1,6 @@
+name: "Hindama CodeQL config"
+queries:
+  - uses: security-extended   # consultas estándar de seguridad
+  - uses: ./codeql/queries    # nuestra consulta propia
+paths-ignore:
+  - tests

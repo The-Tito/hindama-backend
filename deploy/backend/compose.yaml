@@ -1,0 +1,162 @@
+# Production backend on its EC2 (architecture 2.3 and 3.1; ADR-002, ADR-003, ADR-011).
+#
+# PostgreSQL is RDS: it is not here. Every value comes from the environment file that
+# `load-env.sh` writes from SSM Parameter Store at boot (/run/hindama/backend.env, tmpfs, 0600):
+#   docker compose --env-file /run/hindama/backend.env up -d
+# Nothing listens on the public interface: Caddy publishes 8443 only on the private IP, and the
+# security group lets in only the frontend's (SG-FE).
+
+name: hindama
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+
+# Docker's awslogs driver, with the instance role. The group is created by the procedure with a
+# 14-day retention; one stream per container.
+x-logging: &logging
+  driver: awslogs
+  options:
+    awslogs-region: us-east-1
+    awslogs-group: /hindama/backend
+    tag: "{{.Name}}"
+
+x-image: &image ghcr.io/the-tito/hindama-backend:${HINDAMA_IMAGE_TAG:?missing image-tag in SSM}
+
+# Shared by the API and the scanner. TLS to RDS with the server certificate verified against the
+# RDS bundle (rds.force_ssl = 1): asyncpg reads PGSSLMODE and PGSSLROOTCERT.
+x-app-env: &app-env
+  HINDAMA_ENVIRONMENT: production
+  HINDAMA_LOG_LEVEL: INFO
+  HINDAMA_LOG_FORMAT: json
+  HINDAMA_REDIS_URL: redis://:${HINDAMA_REDIS_PASSWORD:?}@redis:6379/0
+  HINDAMA_OWN_IP_ADDRESSES: ${HINDAMA_OWN_IP_ADDRESSES:?}
+  HINDAMA_CREDENTIAL_KEYS: ${HINDAMA_CREDENTIAL_KEYS:?}
+  HINDAMA_CREDENTIAL_KEY_VERSION: ${HINDAMA_CREDENTIAL_KEY_VERSION:?}
+  HINDAMA_AUDIT_HMAC_KEYS: ${HINDAMA_AUDIT_HMAC_KEYS:?}
+  HINDAMA_AUDIT_HMAC_KEY_VERSION: ${HINDAMA_AUDIT_HMAC_KEY_VERSION:?}
+  PGSSLMODE: verify-full
+  PGSSLROOTCERT: /etc/hindama/rds-ca.pem
+
+x-rds-ca: &rds-ca /opt/hindama/rds-ca.pem:/etc/hindama/rds-ca.pem:ro
+
+services:
+  # TLS in front of the API with Caddy's own CA (`tls internal`, name backend.internal). The
+  # frontend trusts that CA's root (NODE_EXTRA_CA_CERTS).
+  caddy:
+    image: caddy:2.11.9-alpine
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${HINDAMA_PRIVATE_IP:?}:8443:8443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data  # the internal CA: its root must survive restarts
+      - caddy-config:/config
+    tmpfs:
+      - /tmp
+    <<: *hardening
+    mem_limit: 128m  # measured: 52 MB at rest with the internal CA (2026-11-22)
+    logging: *logging
+    restart: unless-stopped
+
+  # Queue of runs (ADR-012), as in development: password, append-only, no eviction.
+  redis:
+    image: redis:7.4-bookworm
+    environment:
+      HINDAMA_REDIS_PASSWORD: ${HINDAMA_REDIS_PASSWORD:?}
+      REDISCLI_AUTH: ${HINDAMA_REDIS_PASSWORD}
+    command:
+      - sh
+      - -c
+      - >-
+        exec redis-server --requirepass "$$HINDAMA_REDIS_PASSWORD" --appendonly yes
+        --maxmemory 100mb --maxmemory-policy noeviction
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    user: redis
+    # Not read-only: it writes its append-only file under /data. The rest of the hardening, by hand
+    # (an explicit key does not override the anchor in Compose's merge).
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    logging: *logging
+    restart: unless-stopped
+
+  # `alembic upgrade head` as the schema owner, with the migrations baked into the image, then
+  # exits. The API and the scanner wait for it.
+  migrations:
+    image: *image
+    environment:
+      HINDAMA_MIGRATIONS_DATABASE_URL: postgresql+asyncpg://hindama_migrations:${HINDAMA_MIGRATIONS_DB_PASSWORD:?}@${HINDAMA_DB_HOST:?}:5432/hindama
+      PGSSLMODE: verify-full
+      PGSSLROOTCERT: /etc/hindama/rds-ca.pem
+    volumes:
+      - *rds-ca
+    command: ["alembic", "upgrade", "head"]
+    healthcheck:
+      disable: true
+    <<: *hardening
+    mem_limit: 256m
+    logging: *logging
+    restart: "no"
+
+  api:
+    image: *image
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+      HINDAMA_DATABASE_URL: postgresql+asyncpg://hindama_api:${HINDAMA_API_DB_PASSWORD:?}@${HINDAMA_DB_HOST:?}:5432/hindama
+      HINDAMA_COGNITO_REGION: ${HINDAMA_COGNITO_REGION:?}
+      HINDAMA_COGNITO_USER_POOL_ID: ${HINDAMA_COGNITO_USER_POOL_ID:?}
+      HINDAMA_COGNITO_CLIENT_ID: ${HINDAMA_COGNITO_CLIENT_ID:?}
+    volumes:
+      - *rds-ca
+    # The image's command: uvicorn with 2 workers, no access log. Port 8000 only inside Compose.
+    tmpfs:
+      - /tmp
+    <<: *hardening
+    mem_limit: 512m
+    logging: *logging
+    restart: unless-stopped
+
+  # Test engine (ADR-012): runs the queued runs as hindama_scanner. No ports.
+  scanner:
+    image: *image
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+      HINDAMA_DATABASE_URL: postgresql+asyncpg://hindama_scanner:${HINDAMA_SCANNER_DB_PASSWORD:?}@${HINDAMA_DB_HOST:?}:5432/hindama
+    volumes:
+      - *rds-ca
+    command: ["python", "-m", "hindama.scanner"]
+    healthcheck:
+      disable: true  # the image's check calls the API's /health
+    tmpfs:
+      - /tmp
+    <<: *hardening
+    mem_limit: 768m
+    logging: *logging
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:
+  redis-data:

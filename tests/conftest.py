@@ -1,0 +1,127 @@
+import base64
+import os
+from collections.abc import AsyncIterator
+
+import httpx
+import pytest
+from fastapi import FastAPI
+from pydantic import SecretStr
+
+from hindama.config import Settings
+from hindama.core.audit import HostHasher
+from hindama.core.ownership import OwnershipChecker
+from hindama.core.run_queue import RunQueue
+from hindama.main import create_app
+from tests.dns import FakeResolver
+from tests.events import MemoryRunEvents
+from tests.ownership import ScriptedChecker
+from tests.queue import MemoryRunQueue
+from tests.tokens import CLIENT_ID, REGION, USER_POOL_ID, FakeUserPool
+
+# In CI every test must run: a missing variable would otherwise skip the RLS tests silently.
+FAIL_ON_SKIP = os.environ.get("HINDAMA_FAIL_ON_SKIP") == "1"
+_skipped: list[str] = []
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    if report.skipped:
+        _skipped.append(report.nodeid)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    if FAIL_ON_SKIP and _skipped and exitstatus == pytest.ExitCode.OK:
+        reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+        if reporter is not None:
+            reporter.write_line(f"HINDAMA_FAIL_ON_SKIP: {len(_skipped)} pruebas omitidas")
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+# A fresh key per test session: no test credential outlives it.
+TEST_CREDENTIAL_KEY = base64.b64encode(os.urandom(32)).decode()
+TEST_AUDIT_KEY = base64.b64encode(os.urandom(32)).decode()
+# Same key as the settings of every test app: tests compute the HMAC the log must hold.
+TEST_HASHER = HostHasher({1: base64.b64decode(TEST_AUDIT_KEY)}, 1)
+
+
+def make_settings(database_url: str) -> Settings:
+    return Settings(
+        environment="test",
+        database_url=SecretStr(database_url),
+        log_format="console",
+        cognito_region=REGION,
+        cognito_user_pool_id=USER_POOL_ID,
+        cognito_client_id=CLIENT_ID,
+        credential_keys={1: SecretStr(TEST_CREDENTIAL_KEY)},
+        audit_hmac_keys={1: SecretStr(TEST_AUDIT_KEY)},
+    )
+
+
+@pytest.fixture
+def settings() -> Settings:
+    # The engine is lazy: unit tests never connect to this database.
+    return make_settings("postgresql+asyncpg://test:test@localhost:1/unused")
+
+
+@pytest.fixture
+def user_pool() -> FakeUserPool:
+    return FakeUserPool()
+
+
+@pytest.fixture
+def resolver() -> FakeResolver:
+    return FakeResolver()
+
+
+@pytest.fixture
+def ownership_checker() -> OwnershipChecker:
+    """No network by default; the verification tests override it with a local server."""
+    return ScriptedChecker()
+
+
+@pytest.fixture
+def run_queue() -> RunQueue:
+    """In memory by default; the scanner tests use Redis."""
+    return MemoryRunQueue()
+
+
+@pytest.fixture
+def run_events() -> MemoryRunEvents:
+    """In memory, shared by the API and the scanner of a test (tests/lab/scanning.py)."""
+    return MemoryRunEvents()
+
+
+@pytest.fixture
+def app(
+    settings: Settings,
+    user_pool: FakeUserPool,
+    resolver: FakeResolver,
+    ownership_checker: OwnershipChecker,
+    run_queue: RunQueue,
+    run_events: MemoryRunEvents,
+) -> FastAPI:
+    return create_app(
+        settings,
+        verifier=user_pool.verifier(),
+        profiles=user_pool.profile_client(),
+        resolver=resolver,
+        ownership_checker=ownership_checker,
+        run_queue=run_queue,
+        run_events=run_events,
+    )
+
+
+@pytest.fixture
+async def anonymous_client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
+    """Like Next.js without a session: no Authorization header."""
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+@pytest.fixture
+async def client(
+    anonymous_client: httpx.AsyncClient, user_pool: FakeUserPool
+) -> AsyncIterator[httpx.AsyncClient]:
+    """An analyst's session: every request carries a valid access token."""
+    anonymous_client.headers["Authorization"] = f"Bearer {user_pool.token()}"
+    yield anonymous_client
