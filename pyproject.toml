@@ -76,6 +76,9 @@ ignore = [
 "src/hindama/core/auth.py" = ["TID251"]
 "src/hindama/core/cognito.py" = ["TID251"]
 "src/hindama/main.py" = ["TID251"]
+# Operator scripts of the demo: they print, call the AWS CLI and reach only our own backend and
+# Cloudflare's API (fixed URLs, never a user's destination).
+"deploy/lab/**" = ["T20", "S603", "S607", "S310", "TID251"]
 # Migrations build DDL from module constants (table and role names), never from input.
 "migrations/**" = ["E501", "S608"]
 
