@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from hindama.core.audit import HostHasher, client_ip
 from hindama.core.auth import CurrentUser, Principal, Role
+from hindama.core.cognito import Profile, ProfileClient
 from hindama.core.errors import ForbiddenError, ServiceUnavailableError
 from hindama.db.session import set_rls_context
 from hindama.services.accounts import resolve_user
@@ -81,13 +82,43 @@ def require_analyst(user: AnyUser) -> CurrentUser:
     return user
 
 
-def require_admin(user: AnyUser) -> CurrentUser:
-    """`/admin/*` endpoints (F-13, F-14)."""
+def access_token(request: Request) -> str:
+    """The caller's token, already validated by the middleware."""
+    _, _, token = request.headers["authorization"].partition(" ")
+    return token.strip()
+
+
+def get_profile_client(request: Request) -> ProfileClient:
+    client: ProfileClient = request.app.state.profiles
+    return client
+
+
+async def get_profile(request: Request) -> Profile:
+    """Name, email and TOTP status from Cognito, with the token the middleware validated."""
+    return await get_profile_client(request).get(access_token(request))
+
+
+CallerProfile = Annotated[Profile, Depends(get_profile)]
+
+
+async def require_admin(request: Request, user: AnyUser) -> CurrentUser:
+    """`/admin/*` endpoints (F-13, F-14), only with the TOTP active (RF-86, ADR-018).
+
+    Access tokens do not say whether the sign-in used the second factor; with the TOTP active,
+    Cognito asks for it at every sign-in, so its status (`GetUser`) is what the API checks. The
+    role goes first: an analyst gets its 403 without a call to Cognito.
+    """
     if user.role is not Role.ADMIN:
         raise ForbiddenError(
             "role.forbidden",
             "Acción no permitida",
             "Tu rol no permite acceder a esta sección.",
+        )
+    if not (await get_profile(request)).mfa_enabled:
+        raise ForbiddenError(
+            "auth.mfa_required",
+            "Segundo factor obligatorio",
+            "Activa el segundo factor en tu perfil para entrar al panel de administración.",
         )
     return user
 

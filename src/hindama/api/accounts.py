@@ -7,9 +7,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 
-from hindama.api.dependencies import Analyst, AnyUser, Audit, DbSession
+from hindama.api.dependencies import (
+    Analyst,
+    AnyUser,
+    Audit,
+    CallerProfile,
+    DbSession,
+    access_token,
+    get_profile_client,
+)
 from hindama.config import Settings
-from hindama.core.cognito import Profile, ProfileClient
 from hindama.core.errors import AppError, ServiceUnavailableError
 from hindama.models.enums import AuditAction
 from hindama.schemas.accounts import Me, TermsAcceptance, TermsStatus
@@ -20,28 +27,11 @@ from hindama.services.accounts import Account
 router = APIRouter(tags=["Account"])
 
 
-def access_token(request: Request) -> str:
-    """The caller's token, already validated by the middleware."""
-    _, _, token = request.headers["authorization"].partition(" ")
-    return token.strip()
-
-
-def get_profile_client(request: Request) -> ProfileClient:
-    client: ProfileClient = request.app.state.profiles
-    return client
-
-
-async def get_profile(request: Request) -> Profile:
-    """Name and email from Cognito, with the token the middleware already validated."""
-    return await get_profile_client(request).get(access_token(request))
-
-
 def get_terms_version(request: Request) -> str:
     settings: Settings = request.app.state.settings
     return settings.terms_version
 
 
-CallerProfile = Annotated[Profile, Depends(get_profile)]
 TermsVersion = Annotated[str, Depends(get_terms_version)]
 
 
@@ -52,6 +42,7 @@ def _me(account: Account) -> Me:
         name=account.profile.name,
         email=account.profile.email,
         role=account.user.role,
+        mfa_enabled=account.profile.mfa_enabled,
         terms=TermsStatus(
             current_version=terms.current_version,
             accepted_version=terms.accepted_version,

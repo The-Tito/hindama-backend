@@ -34,9 +34,11 @@ async def user_id(analyst: Analyst) -> str:
 
 @pytest.fixture
 def admin(anonymous_client: httpx.AsyncClient, user_pool: FakeUserPool, subs: list[str]) -> Analyst:
-    """The administrator: same client, with the administrators' group in the token (RN-04)."""
+    """The administrator: same client, with the administrators' group in the token (RN-04) and
+    the TOTP active in Cognito (RF-86)."""
     admin = Analyst(anonymous_client, user_pool, str(new_id()))
     subs.append(admin.sub)
+    user_pool.mfa.add(admin.sub)
     admin.headers = {
         "Authorization": f"Bearer {user_pool.token(sub=admin.sub, groups=[ADMIN_GROUP])}"
     }

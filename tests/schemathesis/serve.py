@@ -91,6 +91,7 @@ async def main() -> None:
             return
         await asyncio.sleep(0.05)
     await accept_terms(token)
+    pool.mfa.add(ADMIN_SUB)  # the panel requires the TOTP (RF-86)
     admin_token = pool.token(sub=ADMIN_SUB, groups=[ADMIN_GROUP])
     await register(admin_token)  # its first request leaves something in the audit log to list
     await asyncio.to_thread(ADMIN_TOKEN_FILE.write_text, admin_token)

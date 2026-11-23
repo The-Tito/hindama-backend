@@ -25,6 +25,7 @@ class Me(ContractModel):
     name: str
     email: Email
     role: Role
+    mfa_enabled: bool
     terms: TermsStatus
 
 

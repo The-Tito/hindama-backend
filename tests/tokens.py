@@ -30,6 +30,7 @@ class FakeUserPool:
         self.attributes: dict[str, dict[str, str]] = {}
         self.get_user_response: tuple[int, dict[str, Any]] | None = None
         self.get_user_requests: list[httpx.Request] = []
+        self.mfa: set[str] = set()  # subs with the TOTP active (UserMFASettingList)
         # DeleteUser: the subs deleted, and a forced answer (status, body) to simulate failures.
         self.deleted: list[str] = []
         self.delete_user_response: tuple[int, dict[str, Any]] | None = None
@@ -106,7 +107,11 @@ class FakeUserPool:
             attributes = [{"Name": "sub", "Value": sub}] + [
                 {"Name": name, "Value": value} for name, value in self.profile(sub).items()
             ]
-            return httpx.Response(200, json={"Username": sub, "UserAttributes": attributes})
+            user: dict[str, Any] = {"Username": sub, "UserAttributes": attributes}
+            if sub in self.mfa:
+                user["UserMFASettingList"] = ["SOFTWARE_TOKEN_MFA"]
+                user["PreferredMfaSetting"] = "SOFTWARE_TOKEN_MFA"
+            return httpx.Response(200, json=user)
 
         return httpx.MockTransport(handle)
 
