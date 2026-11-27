@@ -30,6 +30,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH"
 
+# Apply Debian security fixes released after the base image was published
+# (for example CVE-2025-6020 in libpam), so Trivy does not block on fixed CVEs.
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
+
 # Unprivileged user with a fixed uid; the image has no shell tools beyond the base.
 RUN groupadd --system --gid 10001 hindama \
  && useradd --system --uid 10001 --gid hindama --no-create-home --shell /usr/sbin/nologin hindama
