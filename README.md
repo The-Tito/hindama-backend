@@ -1,4 +1,10 @@
+<p align="center">
+  <img src="logo.png" alt="Hindama" width="320">
+</p>
+
 # hindama-backend
+
+![Hindama: seguridad de APIs REST a partir de su contrato OpenAPI 3](preview.png)
 
 API de la plataforma y motor de pruebas de **Hindama**: FastAPI, PostgreSQL, Redis y un motor de pruebas asíncrono.
 
